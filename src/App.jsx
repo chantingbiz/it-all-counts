@@ -12,9 +12,27 @@ import productive from "./assets/productive.png";
 import unproductive from "./assets/unproductive.png";
 import resetOrStartPage from "./assets/reset or start page.png";
 import backgroundClouds from "./assets/background clouds.mp4";
+import Modal from "./components/Modal.jsx";
+import S3VideoPlayer from "./components/S3VideoPlayer.jsx";
+
+const MOTIVATE_KEYS = [
+  "clips/cartoon_59.mp4",
+];
 
 function App() {
   const [currentOverlay, setCurrentOverlay] = useState(resetOrStartPage);
+  const [showMotivate, setShowMotivate] = useState(false);
+  const [motivateKey, setMotivateKey] = useState("");
+  const openMotivate = () => {
+    const key = MOTIVATE_KEYS[Math.floor(Math.random() * MOTIVATE_KEYS.length)];
+    setMotivateKey(key);
+    setShowMotivate(true);
+  };
+
+  const closeMotivate = () => {
+    setShowMotivate(false);
+    setMotivateKey("");
+  };
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isSessionPaused, setIsSessionPaused] = useState(false);
   const [usedTime, setUsedTime] = useState(0);
@@ -551,7 +569,7 @@ function App() {
                 </div>
                 {/* Motivate Me button */}
                 <div className="w-full">
-                  <button className="relative w-full h-[80px] overflow-hidden rounded-xl cursor-pointer">
+                  <button onClick={openMotivate} className="relative w-full h-[80px] overflow-hidden rounded-xl cursor-pointer">
                     <video 
                       src={motivateVideo} 
                       autoPlay 
@@ -655,6 +673,10 @@ function App() {
             {/* Invisible anchor for todo positioning */}
             <div id="todo-anchor" className="h-5"></div>
           </div>
+
+          <Modal open={showMotivate} onClose={closeMotivate}>
+            <S3VideoPlayer s3Key={motivateKey} />
+          </Modal>
 
           {/* Task Manager - Clean Mobile-First Layout */}
           <div className="absolute left-1/2 transform -translate-x-1/2 z-20 flex flex-col items-center px-4 w-full max-w-[95vw]" style={{ top: 'calc(45% + 20px + 300px)' }}>

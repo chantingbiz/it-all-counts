@@ -1,0 +1,25 @@
+import React, { useEffect, useState } from "react";
+import { getVideoUrl } from "../utils/getVideoUrl"; // adjust path if needed
+
+export default function TestVideo() {
+  const [src, setSrc] = useState("");
+
+  useEffect(() => {
+    getVideoUrl("clips/test.mp4") // replace with a real key
+      .then(url => {
+        console.log("Signed URL:", url);
+        setSrc(url);
+      })
+      .catch(err => console.error("Error fetching video URL:", err));
+  }, []);
+
+  return (
+    <div>
+      {src ? (
+        <video src={src} controls width="640" />
+      ) : (
+        <p>Loading video...</p>
+      )}
+    </div>
+  );
+}
