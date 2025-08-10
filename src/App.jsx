@@ -1,4 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import Modal from "./components/Modal.jsx";
+import MotivateModal from "./components/MotivateModal.jsx";
+import VIDEO_GROUPS from "./data/videoGroups";
+import { useS3Keys } from "./hooks/useS3Keys";
+import { useShuffleBag } from "./hooks/useShuffleBag";
+import { createStorage, getActiveAdapter } from "./lib/storage.js";
 import goldTexture from "./assets/gold.png";
 import motivateVideo from "./assets/motivate.mp4";
 import motivateText from "./assets/motivate-text.png";
@@ -15,6 +21,10 @@ import backgroundClouds from "./assets/background clouds.mp4";
 
 function App() {
   const [currentOverlay, setCurrentOverlay] = useState(resetOrStartPage);
+  const [showMotivate, setShowMotivate] = useState(false);
+  const [motivateKey, setMotivateKey] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [selectedGroupIds, setSelectedGroupIds] = useState(() => new Set(["fun"]));
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isSessionPaused, setIsSessionPaused] = useState(false);
   const [usedTime, setUsedTime] = useState(0);
@@ -25,8 +35,8 @@ function App() {
   
   // Todo list state
   const [recurringTasks, setRecurringTasks] = useState([
-    { id: 1, name: "Cleaning", isActive: false, hasStartedToday: false, timeToday: 0 },
-    { id: 2, name: "Practicing Guitar", isActive: false, hasStartedToday: false, timeToday: 0 }
+    { id: 1, name: "Clean room", isActive: false, hasStartedToday: false, timeToday: 0 },
+    { id: 2, name: "Practice guitar", isActive: false, hasStartedToday: false, timeToday: 0 }
   ]);
   
   const [oneTimeTasks, setOneTimeTasks] = useState([
@@ -43,6 +53,73 @@ function App() {
   // Confirmation popup state
   const [showConfirm, setShowConfirm] = useState(false);
   const [taskToConfirm, setTaskToConfirm] = useState(null);
+  const confirmYesRef = useRef(null);
+  
+  // Clear All confirmation state
+  const [showClearAllConfirm, setShowClearAllConfirm] = useState(false);
+  const clearAllConfirmYesRef = useRef(null);
+
+  // Storage reference
+  const storageRef = useRef(null);
+
+  // top-level in App.jsx
+  const PREFIX = "clips/"; // hardcoded folder
+
+  // derive selected groups
+  const selectedGroups = useMemo(
+    () => VIDEO_GROUPS.filter(g => selectedGroupIds.has(g.id)),
+    [selectedGroupIds]
+  );
+
+  // build terms union unless "all" selected
+  const includeAll = selectedGroupIds.has("all");
+  const activeTerms = useMemo(() => {
+    if (includeAll) return [];
+    const terms = new Set();
+    selectedGroups.forEach(g => (g.terms || []).forEach(t => terms.add(t)));
+    return Array.from(terms);
+  }, [includeAll, selectedGroups]);
+
+  // fetch keys
+  const { keys, loading, error } = useS3Keys({ prefix: PREFIX, q: activeTerms, max: 500 });
+
+  // toggle handler for chips
+  function toggleGroup(id) {
+    setSelectedGroupIds(prev => {
+      const next = new Set(prev);
+      if (id === "all") {
+        // selecting "all" overrides everything else
+        return next.has("all") ? new Set(["fun"]) : new Set(["all"]);
+      }
+      if (next.has("all")) next.delete("all");
+      next.has(id) ? next.delete(id) : next.add(id);
+      // ensure at least one selection; default back to "fun"
+      if (next.size === 0) next.add("fun");
+      return next;
+    });
+  }
+
+  // default tag helper
+  const isDefaultFunOnly = selectedGroupIds.size === 1 && selectedGroupIds.has("fun");
+
+  const bag = useShuffleBag(keys);
+
+  function openMotivate() {
+    const k = bag.next();
+    if (k) {
+      setMotivateKey(k);
+      setShowMotivate(true);
+    }
+  }
+
+  function nextMotivate() {
+    const k = bag.next();
+    if (k) setMotivateKey(k);
+  }
+
+  function closeMotivate() {
+    setShowMotivate(false);
+  }
 
   useEffect(() => {
     let interval;
@@ -78,13 +155,13 @@ function App() {
         if (activeTask.type === 'recurring') {
           setRecurringTasks(prev => prev.map(task => 
             task.id === activeTask.id 
-              ? { ...task, timeToday: task.timeToday + 1, hasStartedToday: true }
+              ? { ...task, isActive: true, hasStartedToday: true }
               : task
           ));
         } else {
           setOneTimeTasks(prev => prev.map(task => 
             task.id === activeTask.id 
-              ? { ...task, timeToday: task.timeToday + 1, timeSpent: task.timeSpent + 1 }
+              ? { ...task, isActive: true, timeToday: task.timeToday + 1, timeSpent: task.timeSpent + 1 }
               : task
           ));
         }
@@ -144,6 +221,109 @@ function App() {
     return () => intervals.forEach(clearInterval);
   }, [tasksToDelete]);
 
+  // Handle ESC key for confirmation modal
+  useEffect(() => {
+    const handleEsc = (e) => {
+      if (e.key === 'Escape' && (showConfirm || showClearAllConfirm)) {
+        if (showConfirm) {
+          setShowConfirm(false);
+          setTaskToConfirm(null);
+        }
+        if (showClearAllConfirm) {
+          setShowClearAllConfirm(false);
+        }
+      }
+    };
+
+    if (showConfirm) {
+      document.addEventListener('keydown', handleEsc);
+      // Focus the Yes button when modal opens
+      if (confirmYesRef.current) {
+        confirmYesRef.current.focus();
+      }
+    }
+
+    if (showClearAllConfirm) {
+      document.addEventListener('keydown', handleEsc);
+      // Focus the Yes button when modal opens
+      if (clearAllConfirmYesRef.current) {
+        clearAllConfirmYesRef.current.focus();
+      }
+    }
+
+    return () => {
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [showConfirm, showClearAllConfirm]);
+
+  // Initialize storage and load persisted data
+  useEffect(() => {
+    const initStorage = async () => {
+      try {
+        const store = await createStorage();
+        storageRef.current = store;
+        
+        // Log which storage adapter is active
+        const adapter = getActiveAdapter();
+        console.info("Storage adapter:", adapter);
+        
+        // Load todos
+        const todos = await store.loadTodos();
+        setRecurringTasks(todos.recurringTasks);
+        setOneTimeTasks(todos.oneTimeTasks);
+        setCompletedTasks(todos.completedTasks);
+        
+        // Load video settings
+        const videoSettings = await store.loadVideoSettings();
+        setSelectedGroupIds(videoSettings.selectedGroupIds);
+      } catch (error) {
+        console.error('Failed to initialize storage:', error);
+      }
+    };
+    
+    initStorage();
+  }, []);
+
+  // Persist todos when they change
+  useEffect(() => {
+    if (storageRef.current) {
+      const saveTodos = async () => {
+        try {
+          await storageRef.current.saveTodos({
+            recurringTasks,
+            oneTimeTasks,
+            completedTasks
+          });
+        } catch (error) {
+          console.error('Failed to save todos:', error);
+        }
+      };
+      
+      // Debounce saves to avoid excessive writes
+      const timeoutId = setTimeout(saveTodos, 1000);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [recurringTasks, oneTimeTasks, completedTasks]);
+
+  // Persist video settings when they change
+  useEffect(() => {
+    if (storageRef.current) {
+      const saveVideoSettings = async () => {
+        try {
+          await storageRef.current.saveVideoSettings({
+            selectedGroupIds
+          });
+        } catch (error) {
+          console.error('Failed to save video settings:', error);
+        }
+      };
+      
+      // Debounce saves to avoid excessive writes
+      const timeoutId = setTimeout(saveVideoSettings, 1000);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [selectedGroupIds]);
+
   const handleStartSession = () => {
     if (!isSessionActive && !isSessionPaused) {
       // Start session
@@ -191,6 +371,26 @@ function App() {
     // Stop any active task
     if (activeTask) {
       handleStopTask(activeTask.id, activeTask.type);
+    }
+    
+    // Clear storage for completed tasks (todos will be saved by the useEffect)
+    if (storageRef.current) {
+      storageRef.current.saveTodos({
+        recurringTasks: recurringTasks.map(task => ({
+          ...task,
+          timeToday: 0,
+          hasStartedToday: false,
+          isActive: false
+        })),
+        oneTimeTasks: oneTimeTasks.map(task => ({
+          ...task,
+          timeToday: 0,
+          isActive: false
+        })),
+        completedTasks: []
+      }).catch(error => {
+        console.error('Failed to save reset state:', error);
+      });
     }
   };
 
@@ -257,21 +457,8 @@ function App() {
     setOneTimeTasks(prev => prev.filter(task => task.id !== taskId));
   };
 
-  // Delete confirmation functions
-  const initiateDelete = (taskId, taskType) => {
-    setTaskToConfirm({ id: taskId, type: taskType });
-    setShowConfirm(true);
-  };
-
-  const cancelDelete = (taskId) => {
-    setTasksToDelete(prev => {
-      const newMap = new Map(prev);
-      newMap.delete(taskId);
-      return newMap;
-    });
-  };
-
-  const confirmDelete = (taskId, taskType) => {
+  // Task management functions
+  const moveTaskToCompleted = (taskId, taskType) => {
     let taskToMove = null;
     
     if (taskType === 'recurring') {
@@ -286,7 +473,23 @@ function App() {
     if (taskToMove) {
       setCompletedTasks(prev => [...prev, { ...taskToMove, completedAt: new Date().toISOString() }]);
     }
-    
+  };
+
+  const deleteTask = (taskId, taskType) => {
+    // Delete task immediately without moving to completed
+    if (taskType === 'recurring') {
+      setRecurringTasks(prev => prev.filter(t => t.id !== taskId));
+    } else {
+      setOneTimeTasks(prev => prev.filter(t => t.id !== taskId));
+    }
+  };
+
+  const initiateDelete = (taskId, taskType) => {
+    setTaskToConfirm({ id: taskId, type: taskType });
+    setShowConfirm(true);
+  };
+
+  const cancelDelete = (taskId) => {
     setTasksToDelete(prev => {
       const newMap = new Map(prev);
       newMap.delete(taskId);
@@ -294,17 +497,22 @@ function App() {
     });
   };
 
+
+
   const handleConfirmDelete = () => {
     if (taskToConfirm) {
-      confirmDelete(taskToConfirm.id, taskToConfirm.type);
+      moveTaskToCompleted(taskToConfirm.id, taskToConfirm.type);
       setShowConfirm(false);
       setTaskToConfirm(null);
     }
   };
 
   const handleCancelDelete = () => {
-    setShowConfirm(false);
-    setTaskToConfirm(null);
+    if (taskToConfirm) {
+      deleteTask(taskToConfirm.id, taskToConfirm.type);
+      setShowConfirm(false);
+      setTaskToConfirm(null);
+    }
   };
 
   // Add task function
@@ -324,6 +532,13 @@ function App() {
     };
     
     setOneTimeTasks(prev => [...prev, newTask]);
+  };
+
+  // Clear All tasks function
+  const handleClearAllTasks = () => {
+    setRecurringTasks([]);
+    setOneTimeTasks([]);
+    setShowClearAllConfirm(false);
   };
 
   const getOverlayImage = () => {
@@ -551,7 +766,7 @@ function App() {
                 </div>
                 {/* Motivate Me button */}
                 <div className="w-full">
-                  <button className="relative w-full h-[80px] overflow-hidden rounded-xl cursor-pointer">
+                  <button onClick={openMotivate} className="relative w-full h-[80px] overflow-hidden rounded-xl cursor-pointer">
                     <video 
                       src={motivateVideo} 
                       autoPlay 
@@ -655,6 +870,25 @@ function App() {
             {/* Invisible anchor for todo positioning */}
             <div id="todo-anchor" className="h-5"></div>
           </div>
+
+          {/* Motivate Modal - keep once, with filters inside */}
+          <Modal 
+            open={showMotivate} 
+            onClose={closeMotivate}
+            closeEventName="iac-video-modal-closing"
+          >
+            <MotivateModal
+              selectedGroupIds={selectedGroupIds}
+              toggleGroup={toggleGroup}
+              keys={keys}
+              loading={loading}
+              error={error}
+              s3Key={motivateKey}
+              isDefaultFunOnly={isDefaultFunOnly}
+              onNext={nextMotivate}
+              poolCount={keys.length}
+            />
+          </Modal>
 
           {/* Task Manager - Clean Mobile-First Layout */}
           <div className="absolute left-1/2 transform -translate-x-1/2 z-20 flex flex-col items-center px-4 w-full max-w-[95vw]" style={{ top: 'calc(45% + 20px + 300px)' }}>
@@ -772,18 +1006,26 @@ function App() {
                           }
                         }}
                       />
-                      <button
-                        onClick={() => {
-                          const input = document.querySelector('input[placeholder="Add new task..."]');
-                          if (input && input.value.trim()) {
-                            addNewTask(input.value);
-                            input.value = '';
-                          }
-                        }}
-                        className="w-full sm:w-auto px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md transition-colors"
-                      >
-                        Add
-                      </button>
+                      <div className="flex gap-2 w-full sm:w-[30%]">
+                        <button
+                          onClick={() => {
+                            const input = document.querySelector('input[placeholder="Add new task..."]');
+                            if (input && input.value.trim()) {
+                              addNewTask(input.value);
+                              input.value = '';
+                            }
+                          }}
+                          className="flex-1 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md transition-colors"
+                        >
+                          Add
+                        </button>
+                        <button
+                          onClick={() => setShowClearAllConfirm(true)}
+                          className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md transition-colors"
+                        >
+                          Clear All
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -865,19 +1107,44 @@ function App() {
        {showConfirm && (
          <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
            <div className="bg-white p-4 rounded-lg shadow-md max-w-sm w-full mx-4 text-center">
-             <p className="text-sm mb-3 text-gray-700">Move to Tasks Completed?</p>
-             <div className="flex justify-center gap-2">
+             <h3 className="text-base font-semibold mb-3">Move to 'Completed Tasks'?</h3>
+             <div className="flex justify-center gap-3">
                <button 
+                 ref={confirmYesRef}
                  onClick={handleConfirmDelete} 
-                 className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
+                 className="px-4 py-2 rounded bg-gray-300 hover:bg-gray-400 text-black transition-colors"
                >
-                 OK
+                 Yes
                </button>
                <button 
                  onClick={handleCancelDelete} 
-                 className="px-3 py-1 bg-gray-300 hover:bg-gray-400 rounded transition-colors"
+                 className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white transition-colors"
                >
-                 Cancel
+                 No, just delete
+               </button>
+             </div>
+           </div>
+         </div>
+       )}
+
+       {/* Clear All Confirmation Modal */}
+       {showClearAllConfirm && (
+         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+           <div className="bg-white p-4 rounded-lg shadow-md max-w-sm w-full mx-4 text-center">
+             <h3 className="text-base font-semibold mb-3">Clear all tasks?</h3>
+             <div className="flex justify-center gap-3">
+               <button 
+                 ref={clearAllConfirmYesRef}
+                 onClick={handleClearAllTasks} 
+                 className="px-4 py-2 rounded bg-green-600 hover:bg-green-700 text-white transition-colors"
+               >
+                 Yes
+               </button>
+               <button 
+                 onClick={() => setShowClearAllConfirm(false)} 
+                 className="px-4 py-2 rounded bg-gray-300 hover:bg-gray-400 text-black transition-colors"
+               >
+                 No
                </button>
              </div>
            </div>
