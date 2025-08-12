@@ -4,6 +4,7 @@ import MotivateModal from "./components/MotivateModal.jsx";
 import VIDEO_GROUPS from "./data/videoGroups";
 import { useS3Keys } from "./hooks/useS3Keys";
 import { useShuffleBag } from "./hooks/useShuffleBag";
+import useTaskTimerHealth from "./hooks/useTaskTimerHealth";
 import { createStorage, getActiveAdapter } from "./lib/storage.js";
 import goldTexture from "./assets/gold.png";
 import motivateVideo from "./assets/motivate.mp4";
@@ -35,13 +36,13 @@ function App() {
   
   // Todo list state
   const [recurringTasks, setRecurringTasks] = useState([
-    { id: 1, name: "Clean room", isActive: false, hasStartedToday: false, timeToday: 0 },
-    { id: 2, name: "Practice guitar", isActive: false, hasStartedToday: false, timeToday: 0 }
+    { id: 1, name: "Clean room", isActive: false, hasStartedToday: false, timeToday: 0, isRunning: false, lastTickTs: undefined, startTs: undefined, accumulatedMs: 0 },
+    { id: 2, name: "Practice guitar", isActive: false, hasStartedToday: false, timeToday: 0, isRunning: false, lastTickTs: undefined, startTs: undefined, accumulatedMs: 0 }
   ]);
   
   const [oneTimeTasks, setOneTimeTasks] = useState([
-    { id: 3, name: "Finish Project", isActive: false, timeSpent: 0, timeToday: 0 },
-    { id: 4, name: "Read Book", isActive: false, timeSpent: 0, timeToday: 0 }
+    { id: 3, name: "Finish Project", isActive: false, timeSpent: 0, timeToday: 0, isRunning: false, lastTickTs: undefined, startTs: undefined, accumulatedMs: 0 },
+    { id: 4, name: "Read Book", isActive: false, timeSpent: 0, timeToday: 0, isRunning: false, lastTickTs: undefined, startTs: undefined, accumulatedMs: 0 }
   ]);
 
   // Delete confirmation state
@@ -55,12 +56,44 @@ function App() {
   const [taskToConfirm, setTaskToConfirm] = useState(null);
   const confirmYesRef = useRef(null);
   
+  // Force stop confirmation state
+  const [showForceStopConfirm, setShowForceStopConfirm] = useState(false);
+  const [taskToForceStop, setTaskToForceStop] = useState(null);
+  const forceStopYesRef = useRef(null);
+  
   // Clear All confirmation state
   const [showClearAllConfirm, setShowClearAllConfirm] = useState(false);
   const clearAllConfirmYesRef = useRef(null);
 
   // Storage reference
   const storageRef = useRef(null);
+
+  // Combined tasks for the health hook
+  const allTasks = useMemo(() => [
+    ...recurringTasks.map(task => ({ ...task, taskType: 'recurring' })),
+    ...oneTimeTasks.map(task => ({ ...task, taskType: 'oneTime' }))
+  ], [recurringTasks, oneTimeTasks]);
+
+  // Task timer health hook
+  const { handleLongPressStart, handleLongPressEnd } = useTaskTimerHealth({
+    tasks: allTasks,
+    setTasks: (updater) => {
+      if (typeof updater === 'function') {
+        const updatedTasks = updater(allTasks);
+        // Split updated tasks back to their respective arrays
+        const updatedRecurring = updatedTasks.filter(t => t.taskType === 'recurring').map(({ taskType, ...task }) => task);
+        const updatedOneTime = updatedTasks.filter(t => t.taskType === 'oneTime').map(({ taskType, ...task }) => task);
+        setRecurringTasks(updatedRecurring);
+        setOneTimeTasks(updatedOneTime);
+      } else {
+        // Handle direct array updates
+        const updatedRecurring = updater.filter(t => t.taskType === 'recurring').map(({ taskType, ...task }) => task);
+        const updatedOneTime = updater.filter(t => t.taskType === 'oneTime').map(({ taskType, ...task }) => task);
+        setRecurringTasks(updatedRecurring);
+        setOneTimeTasks(updatedOneTime);
+      }
+    }
+  });
 
   // top-level in App.jsx
   const PREFIX = "clips/"; // hardcoded folder
@@ -117,6 +150,11 @@ function App() {
     if (k) setMotivateKey(k);
   }
 
+  function prevMotivate() {
+    const k = bag.prev();
+    if (k) setMotivateKey(k);
+  }
+
   function closeMotivate() {
     setShowMotivate(false);
   }
@@ -151,17 +189,31 @@ function App() {
         setUsedTime(prev => prev + 1);
         setCurrentSessionTime(prev => prev + 1);
         
+        const now = Date.now();
+        
         // Update cumulative time for the active task
         if (activeTask.type === 'recurring') {
           setRecurringTasks(prev => prev.map(task => 
             task.id === activeTask.id 
-              ? { ...task, isActive: true, hasStartedToday: true }
+              ? { 
+                  ...task, 
+                  isActive: true, 
+                  hasStartedToday: true,
+                  timeToday: task.timeToday + 1,
+                  lastTickTs: now
+                }
               : task
           ));
         } else {
           setOneTimeTasks(prev => prev.map(task => 
             task.id === activeTask.id 
-              ? { ...task, isActive: true, timeToday: task.timeToday + 1, timeSpent: task.timeSpent + 1 }
+              ? { 
+                  ...task, 
+                  isActive: true, 
+                  timeToday: task.timeToday + 1, 
+                  timeSpent: task.timeSpent + 1,
+                  lastTickTs: now
+                }
               : task
           ));
         }
@@ -224,13 +276,17 @@ function App() {
   // Handle ESC key for confirmation modal
   useEffect(() => {
     const handleEsc = (e) => {
-      if (e.key === 'Escape' && (showConfirm || showClearAllConfirm)) {
+      if (e.key === 'Escape' && (showConfirm || showClearAllConfirm || showForceStopConfirm)) {
         if (showConfirm) {
           setShowConfirm(false);
           setTaskToConfirm(null);
         }
         if (showClearAllConfirm) {
           setShowClearAllConfirm(false);
+        }
+        if (showForceStopConfirm) {
+          setShowForceStopConfirm(false);
+          setTaskToForceStop(null);
         }
       }
     };
@@ -251,10 +307,18 @@ function App() {
       }
     }
 
+    if (showForceStopConfirm) {
+      document.addEventListener('keydown', handleEsc);
+      // Focus the Yes button when modal opens
+      if (forceStopYesRef.current) {
+        forceStopYesRef.current.focus();
+      }
+    }
+
     return () => {
       document.removeEventListener('keydown', handleEsc);
     };
-  }, [showConfirm, showClearAllConfirm]);
+  }, [showConfirm, showClearAllConfirm, showForceStopConfirm]);
 
   // Initialize storage and load persisted data
   useEffect(() => {
@@ -269,9 +333,19 @@ function App() {
         
         // Load todos
         const todos = await store.loadTodos();
-        setRecurringTasks(todos.recurringTasks);
-        setOneTimeTasks(todos.oneTimeTasks);
-        setCompletedTasks(todos.completedTasks);
+        
+        // Ensure all tasks have the new health fields with default values
+        const ensureHealthFields = (task) => ({
+          ...task,
+          isRunning: task.isRunning || false,
+          lastTickTs: task.lastTickTs || undefined,
+          startTs: task.startTs || undefined,
+          accumulatedMs: task.accumulatedMs || 0
+        });
+        
+        setRecurringTasks(todos.recurringTasks?.map(ensureHealthFields) || []);
+        setOneTimeTasks(todos.oneTimeTasks?.map(ensureHealthFields) || []);
+        setCompletedTasks(todos.completedTasks || []);
         
         // Load video settings
         const videoSettings = await store.loadVideoSettings();
@@ -283,6 +357,23 @@ function App() {
     
     initStorage();
   }, []);
+
+  // Handle long-press events from the health hook
+  useEffect(() => {
+    const handleTaskLongPress = (event) => {
+      const { taskId } = event.detail;
+      const task = allTasks.find(t => t.id === taskId);
+      if (task) {
+        handleForceStopTask(taskId, task.taskType);
+      }
+    };
+
+    window.addEventListener('taskLongPress', handleTaskLongPress);
+    
+    return () => {
+      window.removeEventListener('taskLongPress', handleTaskLongPress);
+    };
+  }, [allTasks]);
 
   // Persist todos when they change
   useEffect(() => {
@@ -356,13 +447,21 @@ function App() {
       ...task,
       timeToday: 0,
       hasStartedToday: false,
-      isActive: false
+      isActive: false,
+      isRunning: false,
+      lastTickTs: undefined,
+      startTs: undefined,
+      accumulatedMs: 0
     })));
     
     setOneTimeTasks(prev => prev.map(task => ({
       ...task,
       timeToday: 0,
-      isActive: false
+      isActive: false,
+      isRunning: false,
+      lastTickTs: undefined,
+      startTs: undefined,
+      accumulatedMs: 0
     })));
     
     // Clear completed tasks
@@ -411,18 +510,35 @@ function App() {
     setTaskStartTime(Date.now());
     setCurrentSessionTime(0);
     
+    const now = Date.now();
+    
     // Update task state
     if (taskType === 'recurring') {
       setRecurringTasks(prev => prev.map(task => 
         task.id === taskId 
-          ? { ...task, isActive: true, hasStartedToday: true }
-          : { ...task, isActive: false }
+          ? { 
+              ...task, 
+              isActive: true, 
+              hasStartedToday: true, 
+              isRunning: true, 
+              startTs: now, 
+              lastTickTs: now,
+              accumulatedMs: task.accumulatedMs || 0
+            }
+          : { ...task, isActive: false, isRunning: false }
       ));
     } else {
       setOneTimeTasks(prev => prev.map(task => 
         task.id === taskId 
-          ? { ...task, isActive: true }
-          : { ...task, isActive: false }
+          ? { 
+              ...task, 
+              isActive: true, 
+              isRunning: true, 
+              startTs: now, 
+              lastTickTs: now,
+              accumulatedMs: task.accumulatedMs || 0
+            }
+          : { ...task, isActive: false, isRunning: false }
       ));
     }
   };
@@ -431,18 +547,36 @@ function App() {
     if (!activeTask || activeTask.id !== taskId) return;
     
     const timeSpent = Math.floor((Date.now() - taskStartTime) / 1000);
+    const now = Date.now();
     
     // Update task state
     if (taskType === 'recurring') {
       setRecurringTasks(prev => prev.map(task => 
         task.id === taskId 
-          ? { ...task, isActive: false, timeToday: task.timeToday + timeSpent }
+          ? { 
+              ...task, 
+              isActive: false, 
+              isRunning: false,
+              timeToday: task.timeToday + timeSpent,
+              lastTickTs: now,
+              accumulatedMs: (task.accumulatedMs || 0) + (timeSpent * 1000),
+              startTs: undefined
+            }
           : task
       ));
     } else {
       setOneTimeTasks(prev => prev.map(task => 
         task.id === taskId 
-          ? { ...task, isActive: false, timeSpent: task.timeSpent + timeSpent }
+          ? { 
+              ...task, 
+              isActive: false, 
+              isRunning: false,
+              timeToday: task.timeToday + timeSpent, 
+              timeSpent: task.timeSpent + timeSpent,
+              lastTickTs: now,
+              accumulatedMs: (task.accumulatedMs || 0) + (timeSpent * 1000),
+              startTs: undefined
+            }
           : task
       ));
     }
@@ -515,6 +649,60 @@ function App() {
     }
   };
 
+  // Force stop task handlers
+  const handleForceStopTask = (taskId, taskType) => {
+    setTaskToForceStop({ id: taskId, type: taskType });
+    setShowForceStopConfirm(true);
+  };
+
+  const handleConfirmForceStop = () => {
+    if (taskToForceStop) {
+      const { id, type } = taskToForceStop;
+      const now = Date.now();
+      
+      if (type === 'recurring') {
+        setRecurringTasks(prev => prev.map(task => 
+          task.id === id 
+            ? { 
+                ...task, 
+                isActive: false, 
+                isRunning: false,
+                lastTickTs: now,
+                startTs: undefined
+              }
+            : task
+        ));
+      } else {
+        setOneTimeTasks(prev => prev.map(task => 
+          task.id === id 
+            ? { 
+                ...task, 
+                isActive: false, 
+                isRunning: false,
+                lastTickTs: now,
+                startTs: undefined
+              }
+            : task
+        ));
+      }
+      
+      // Clear active task if this was the active one
+      if (activeTask && activeTask.id === id) {
+        setActiveTask(null);
+        setTaskStartTime(null);
+        setCurrentSessionTime(0);
+      }
+      
+      setShowForceStopConfirm(false);
+      setTaskToForceStop(null);
+    }
+  };
+
+  const handleCancelForceStop = () => {
+    setShowForceStopConfirm(false);
+    setTaskToForceStop(null);
+  };
+
   // Add task function
   const addNewTask = (taskName) => {
     if (!taskName.trim()) return;
@@ -528,7 +716,11 @@ function App() {
       name: taskName.trim(),
       isActive: false,
       timeSpent: 0,
-      timeToday: 0
+      timeToday: 0,
+      isRunning: false,
+      lastTickTs: undefined,
+      startTs: undefined,
+      accumulatedMs: 0
     };
     
     setOneTimeTasks(prev => [...prev, newTask]);
@@ -634,7 +826,7 @@ function App() {
       {/* Main content area - starts at top and scrolls naturally */}
       <div className="relative w-full pb-24">
         {/* Centered main container - starts at top */}
-        <div className="relative w-full max-w-[720px] mx-auto">
+        <div data-app-content className="relative w-full max-w-[720px] mx-auto">
           {/* Main background video - scales with container */}
           <video
             autoPlay
@@ -886,7 +1078,13 @@ function App() {
               s3Key={motivateKey}
               isDefaultFunOnly={isDefaultFunOnly}
               onNext={nextMotivate}
+              onPrev={prevMotivate}
               poolCount={keys.length}
+              onEnded={() => {}}
+              onError={() => {}}
+              onPlayStart={() => {}}
+              onRateLimited={() => {}}
+              onRequestClose={closeMotivate}
             />
           </Modal>
 
@@ -916,6 +1114,11 @@ function App() {
                             ? 'bg-green-50 border-green-200 animate-pulse' 
                             : 'bg-white hover:bg-gray-50'
                         }`}
+                        onMouseDown={() => handleLongPressStart(task.id)}
+                        onMouseUp={() => handleLongPressEnd(task.id)}
+                        onMouseLeave={() => handleLongPressEnd(task.id)}
+                        onTouchStart={() => handleLongPressStart(task.id)}
+                        onTouchEnd={() => handleLongPressEnd(task.id)}
                       >
                         {isDeleting ? (
                           /* Undo Button UI */
@@ -1142,6 +1345,30 @@ function App() {
                </button>
                <button 
                  onClick={() => setShowClearAllConfirm(false)} 
+                 className="px-4 py-2 rounded bg-gray-300 hover:bg-gray-400 text-black transition-colors"
+               >
+                 No
+               </button>
+             </div>
+           </div>
+         </div>
+       )}
+
+       {/* Force Stop Confirmation Modal */}
+       {showForceStopConfirm && (
+         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+           <div className="bg-white p-4 rounded-lg shadow-md max-w-sm w-full mx-4 text-center">
+             <h3 className="text-base font-semibold mb-3">Force stop this task?</h3>
+             <div className="flex justify-center gap-3">
+               <button 
+                 ref={forceStopYesRef}
+                 onClick={handleConfirmForceStop} 
+                 className="px-4 py-2 rounded bg-green-600 hover:bg-green-700 text-white transition-colors"
+               >
+                 Yes
+               </button>
+               <button 
+                 onClick={handleCancelForceStop} 
                  className="px-4 py-2 rounded bg-gray-300 hover:bg-gray-400 text-black transition-colors"
                >
                  No

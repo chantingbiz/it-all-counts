@@ -1,6 +1,26 @@
-﻿import React, { useEffect } from "react";
+﻿import React, { useEffect, useRef, useState } from "react";
 
 export default function Modal({ open, onClose, onCloseStart, closeEventName, children }) {
+  const cardRef = useRef(null);
+  const [capPx, setCapPx] = useState(720); // sensible default
+
+  useEffect(() => {
+    const contentEl = document.querySelector("[data-app-content]");
+    const updateWidth = () => {
+      if (contentEl) setCapPx(Math.round(contentEl.getBoundingClientRect().width));
+    };
+    updateWidth();
+    
+    const roW = new ResizeObserver(updateWidth);
+    contentEl && roW.observe(contentEl);
+    window.addEventListener("resize", updateWidth);
+    
+    return () => { 
+      roW.disconnect(); 
+      window.removeEventListener("resize", updateWidth);
+    };
+  }, []);
+
   useEffect(() => {
     function onKey(e) {
       if (e.key === "Escape") {
@@ -36,7 +56,11 @@ export default function Modal({ open, onClose, onCloseStart, closeEventName, chi
         }}
         aria-hidden="true"
       />
-      <div className="relative z-[1001] w-[92vw] max-w-[900px] bg-black rounded-2xl shadow-xl p-3 sm:p-4">
+      <div 
+        ref={cardRef}
+        style={{ maxWidth: capPx ? `${capPx}px` : undefined }}
+        className="relative z-[1001] w-[92vw] bg-black rounded-2xl shadow-xl p-3 sm:p-4"
+      >
         <button
           onClick={() => {
             onCloseStart?.();
@@ -50,6 +74,7 @@ export default function Modal({ open, onClose, onCloseStart, closeEventName, chi
         >
           ✕
         </button>
+        
         {children}
       </div>
     </div>
