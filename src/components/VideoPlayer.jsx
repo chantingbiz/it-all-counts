@@ -95,8 +95,8 @@ export default function VideoPlayer({
   const stallRef = useRef(null); // stall watchdog
   
   // Track user intent vs. unlock state
-  const audioUnlockedRef = useRef(false);   // set true after AudioContext resume or a successful unmuted play
-  const userMutedRef = useRef(false);        // set true only when user toggles mute to on
+  const audioUnlockedRef = useRef(false);  // true after AudioContext resume OR a successful unmuted play
+  const userMutedRef = useRef(false);      // true only when the user toggles mute on
   
   // Like/Dislike state
   const [liked, setLiked] = useState(isLiked(videoId));
@@ -159,6 +159,7 @@ export default function VideoPlayer({
     setIsMuted(false);
     setIsMutedUI(false);
     userMutedRef.current = false;
+    audioUnlockedRef.current = true; // a successful unmute implies user intent and likely audio unlocked
     unlockAudioOnce().then(() => {
       audioUnlockedRef.current = true;
     });
@@ -242,36 +243,42 @@ export default function VideoPlayer({
   };
 
   // Gate starting playback via rate limiter (placeholder for now)
-  const gateAndPlay = async () => {
-    const v = videoRef.current; if (!v || !dataSrc) return;
-    
-    // TODO: Implement rate limiter when lib is available
-    // For now, allow all playback
+  const gateAndPlay = async (dataSrc) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.src = dataSrc;
+    v.load();
+
+    const preferUnmuted = audioUnlockedRef.current && !userMutedRef.current;
+    v.muted = !preferUnmuted;
+
     try {
-      v.src = dataSrc; 
-      v.load();
-      v.muted = false;
-      await unlockAudioOnce();
-      audioUnlockedRef.current = true;
       await v.play();
+      if (preferUnmuted) {
+        // mark unlock on success
+        audioUnlockedRef.current = true;
+      }
       setIsPlaying(true); 
       setIsBuffering(false); 
       setShowEndBar(false); 
-      setIsMuted(false);
-      setIsMutedUI(false);
+      setIsMuted(v.muted);
+      setIsMutedUI(v.muted);
       markPlayStarted();
     } catch {
-      try {
+      // Only fallback if we attempted unmuted
+      if (preferUnmuted) {
         v.muted = true;
-        await v.play();
-        setIsPlaying(true); 
-        setIsBuffering(false); 
-        setShowEndBar(false); 
-        setIsMuted(true);
-        setIsMutedUI(true);
-        markPlayStarted();
-      } catch (err) {
-        setShowTapToPlay(true);
+        try { 
+          await v.play(); 
+          setIsPlaying(true); 
+          setIsBuffering(false); 
+          setShowEndBar(false); 
+          setIsMuted(true);
+          setIsMutedUI(true);
+          markPlayStarted();
+        } catch (err) {
+          setShowTapToPlay(true);
+        }
       }
     }
   };
@@ -392,14 +399,19 @@ export default function VideoPlayer({
       setShowTapToPlay(false);
     } catch {}
     // Now gate & start the new one
-    gateAndPlay();
+    gateAndPlay(dataSrc);
   }, [videoId, dataSrc]);
 
+  // Keep UI state in sync by listening to the element
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    v.muted = isMuted;
-  }, [isMuted]);
+    const onVol = () => setIsMutedUI?.(v.muted);
+    v.addEventListener('volumechange', onVol);
+    // initialize once
+    setIsMutedUI?.(v.muted);
+    return () => v.removeEventListener('volumechange', onVol);
+  }, []);
 
   useEffect(() => {
     const v = videoRef.current;
