@@ -2,6 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isLiked, isDisliked, setLike, setDislike, markWatched, toggleFavorite } from "../lib/userPrefs";
 import RainbowPanel from "./RainbowPanel";
 
+// Audio unlock helper for mobile devices
+let audioUnlocked = false;
+let audioCtx = null;
+async function unlockAudioOnce() {
+  if (audioUnlocked) return true;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) { audioUnlocked = true; return true; }
+  if (!audioCtx) audioCtx = new Ctx();
+  if (audioCtx.state !== 'running') { try { await audioCtx.resume(); } catch(e) {} }
+  audioUnlocked = (audioCtx.state === 'running');
+  return audioUnlocked;
+}
+
 // Text-based Play/Pause button component
 function PlayPauseButton({ isPlaying, onToggle }) {
   return (
@@ -148,7 +161,9 @@ export default function VideoPlayer({
     try {
       v.src = dataSrc; 
       v.load();
+      // Try unmuted first
       v.muted = false;
+      await unlockAudioOnce();
       await v.play();
       setIsPlaying(true); 
       setIsBuffering(false); 
@@ -156,6 +171,7 @@ export default function VideoPlayer({
       markPlayStarted();
     } catch {
       try {
+        // Fallback to muted if unmuted fails
         v.muted = true;
         await v.play();
         setIsPlaying(true); 
@@ -171,10 +187,28 @@ export default function VideoPlayer({
 
   useEffect(() => () => clearTimeout(hideTimer.current), []);
 
+  // Audio unlock effect for mobile devices
+  useEffect(() => {
+    const handleUnlock = async () => {
+      await unlockAudioOnce();
+    };
+    
+    document.addEventListener('touchend', handleUnlock, { once: true });
+    document.addEventListener('click', handleUnlock, { once: true });
+    
+    return () => {
+      document.removeEventListener('touchend', handleUnlock);
+      document.removeEventListener('click', handleUnlock);
+    };
+  }, []);
+
   // Attach video event listeners
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
+
+    // Set mobile-safe properties
+    v.disablePictureInPicture = true;
 
     const onPlay = () => {
       setIsPlaying(true);
@@ -344,7 +378,14 @@ export default function VideoPlayer({
           disablePictureInPicture
           controlsList="nodownload noplaybackrate nofullscreen"
           className="w-full h-auto rounded-lg bg-black object-contain
-                     max-h-[62vh] sm:max-h-[64vh] md:max-h-[66vh] lg:max-h-[68vh]"
+                     max-h-[62vh] sm:max-h-[64vh] md:max-h-[68vh] lg:max-h-[68vh]"
+          onClick={() => {
+            if (videoRef.current?.muted) {
+              videoRef.current.muted = false;
+              unlockAudioOnce();
+              videoRef.current.play().catch(()=>{});
+            }
+          }}
         />
         
         {/* Remove/disable the old absolute scrubber overlay. Keep spinner/toasts/end bar as-is. */}

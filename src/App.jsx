@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { flushSync } from 'react-dom';
 import Modal from "./components/Modal.jsx";
 import MotivateModal from "./components/MotivateModal.jsx";
 import QuotaModal from "./components/QuotaModal.jsx";
@@ -238,9 +239,26 @@ function App() {
           return;
         }
 
-        setMotivateKey(candidate.id);
-        setShowMotivate(true);
-        return;
+              setMotivateKey(candidate.id);
+      flushSync(() => setShowMotivate(true));
+      
+      // Attempt unmuted playback after modal opens
+      setTimeout(async () => {
+        const videoElement = document.querySelector('video');
+        if (videoElement) {
+          try {
+            // Try to unmute and play
+            videoElement.muted = false;
+            await videoElement.play();
+          } catch (e) {
+            // Fallback: start muted so playback still begins
+            videoElement.muted = true;
+            try { await videoElement.play(); } catch {}
+          }
+        }
+      }, 100);
+      
+      return;
       }
 
       // Not in replay mode → use pickNextCandidate with favorites-only logic
@@ -275,7 +293,23 @@ function App() {
       }
 
       setMotivateKey(candidate.id);
-      setShowMotivate(true);
+      flushSync(() => setShowMotivate(true));
+      
+      // Attempt unmuted playback after modal opens
+      setTimeout(async () => {
+        const videoElement = document.querySelector('video');
+        if (videoElement) {
+          try {
+            // Try to unmute and play
+            videoElement.muted = false;
+            await videoElement.play();
+          } catch (e) {
+            // Fallback: start muted so playback still begins
+            videoElement.muted = true;
+            try { await videoElement.play(); } catch {}
+          }
+        }
+      }, 100);
     } catch (e) {
       console.error("openMotivate error:", e);
     }
@@ -1336,7 +1370,23 @@ function App() {
             onSelect={(videoId) => {
               // load & play that specific video
               setMotivateKey(videoId);
-              setShowMotivate(true);
+              flushSync(() => setShowMotivate(true));
+              
+              // Attempt unmuted playback after modal opens
+              setTimeout(async () => {
+                const videoElement = document.querySelector('video');
+                if (videoElement) {
+                  try {
+                    // Try to unmute and play
+                    videoElement.muted = false;
+                    await videoElement.play();
+                  } catch (e) {
+                    // Fallback: start muted so playback still begins
+                    videoElement.muted = true;
+                    try { await videoElement.play(); } catch {}
+                  }
+                }
+              }, 100);
             }}
           />
 
