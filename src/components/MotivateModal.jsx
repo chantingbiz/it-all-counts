@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { flushSync as _flushSync } from "react-dom";
 import VideoPlayer from "./VideoPlayer";
 import { useSignedS3Url } from "../hooks/useSignedS3Url";
 import VIDEO_GROUPS from "../data/videoGroups";
@@ -9,7 +10,7 @@ import { markWatched } from "../lib/userPrefs";
 import usePlaybackPrefs from "../hooks/usePlaybackPrefs";
 
 // VideoTopBar Component
-function VideoTopBar({ onPrevious, onNext, onFilters, showFilters, loading, poolCount, children }) {
+function VideoTopBar({ onPrevious, onNext, onFilters, showFilters, loading, poolCount, children, onVideoSwitch }) {
   return (
     <div className="sticky top-0 z-30 flex items-center justify-between bg-white px-3 py-2 border-b border-neutral-200">
       {/* Left side - Filters button */}
@@ -24,7 +25,15 @@ function VideoTopBar({ onPrevious, onNext, onFilters, showFilters, loading, pool
       <div className="flex items-center gap-2">
         {/* Previous button - square, icon-only */}
         <button
-          onClick={onPrevious}
+          onClick={() => {
+            onPrevious?.();
+            // Handle video switching if callback provided
+            if (onVideoSwitch) {
+              // Get previous video URL - this would need to be implemented based on your video source logic
+              // For now, just call the handler
+              onVideoSwitch();
+            }
+          }}
           disabled={loading}
           className="h-8 w-8 md:h-10 md:w-10 px-0 inline-flex items-center justify-center rounded-lg border border-black/10 bg-black text-white leading-none whitespace-nowrap text-sm"
           aria-label="Previous video"
@@ -37,7 +46,15 @@ function VideoTopBar({ onPrevious, onNext, onFilters, showFilters, loading, pool
 
         {/* Next button */}
         <button
-          onClick={onNext}
+          onClick={() => {
+            onNext?.();
+            // Handle video switching if callback provided
+            if (onVideoSwitch) {
+              // Get next video URL - this would need to be implemented based on your video source logic
+              // For now, just call the handler
+              onVideoSwitch();
+            }
+          }}
           disabled={loading || (poolCount || 0) < 1}
           className="h-8 px-2 text-xs md:h-10 md:px-3 md:text-sm inline-flex items-center justify-center rounded-lg border border-black/10 bg-black text-white leading-none whitespace-nowrap"
         >
@@ -76,6 +93,100 @@ export default function MotivateModal({
   const [showFavorites, setShowFavorites] = useState(false);
   const { url: videoUrl, error: videoError, loading: videoLoading } = useSignedS3Url(s3Key);
   const { onlyFavorites, setOnlyFavorites } = usePlaybackPrefs();
+  const videoRef = useRef(null);
+  
+  // Safe flushSync wrapper
+  const flush = typeof _flushSync === 'function' ? _flushSync : (fn) => fn();
+  
+  // Audio unlock helper
+  let audioUnlocked = false, audioCtx = null;
+  async function unlockAudioOnce() {
+    if (audioUnlocked) return true;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) { audioUnlocked = true; return true; }
+    if (!audioCtx) audioCtx = new Ctx();
+    if (audioCtx.state !== 'running') { try { await audioCtx.resume(); } catch(e){} }
+    audioUnlocked = (audioCtx.state === 'running'); return audioUnlocked;
+  }
+
+  // Handle video opening with audio unlock
+  useEffect(() => {
+    if (videoUrl && videoRef.current) {
+      // Use safe flush wrapper to open modal, then immediately unlock audio and start unmuted
+      flush(() => {
+        // Modal is now open
+      });
+      
+      // Immediately try to unlock audio and start unmuted
+      const startUnmuted = async () => {
+        try {
+          const v = videoRef?.current;
+          if (v) {
+            await unlockAudioOnce?.();
+            v.muted = false;
+            try { 
+              await v.play(); 
+            } catch { 
+              v.muted = true; 
+              try { 
+                await v.play(); 
+              } catch {} 
+            }
+          } else {
+            // Fallback if ref not ready synchronously
+            setTimeout(async () => {
+              const vv = videoRef?.current;
+              if (!vv) return;
+              try {
+                await unlockAudioOnce?.();
+                vv.muted = false;
+                try { 
+                  await vv.play(); 
+                } catch { 
+                  vv.muted = true; 
+                  try { 
+                    await vv.play(); 
+                  } catch {} 
+                }
+              } catch (e) {
+                console.warn("Fallback audio unlock failed:", e);
+              }
+            }, 0);
+          }
+        } catch (e) {
+          console.warn("Audio unlock failed:", e);
+        }
+      };
+      
+      startUnmuted();
+    }
+  }, [videoUrl]);
+
+  // Handle video switching (next/prev) - reuse same video element
+  const handleVideoSwitch = async (nextUrl) => {
+    try {
+      if (!videoRef.current) return;
+      
+      const v = videoRef.current;
+      v.pause();
+      v.src = nextUrl;
+      v.load();
+      
+      if (audioUnlocked) {
+        v.muted = false;
+        try { 
+          await v.play(); 
+        } catch { 
+          v.muted = true; 
+          try { 
+            await v.play(); 
+          } catch {} 
+        }
+      }
+    } catch (e) {
+      console.warn("Video switch failed:", e);
+    }
+  };
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -99,6 +210,7 @@ export default function MotivateModal({
         showFilters={showFilters}
         loading={loading}
         poolCount={poolCount}
+        onVideoSwitch={handleVideoSwitch}
       />
 
       {/* Scrollable content area */}
@@ -167,7 +279,7 @@ export default function MotivateModal({
             onTryNext={onNext}
             onRequestClose={onRequestClose}
             className="w-full rounded-lg"
-
+            videoRef={videoRef}
           />
         </div>
 

@@ -2,17 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isLiked, isDisliked, setLike, setDislike, markWatched, toggleFavorite } from "../lib/userPrefs";
 import RainbowPanel from "./RainbowPanel";
 
-// Audio unlock helper for mobile devices
-let audioUnlocked = false;
-let audioCtx = null;
+// Audio unlock helper
+let audioUnlocked = false, audioCtx = null;
 async function unlockAudioOnce() {
   if (audioUnlocked) return true;
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) { audioUnlocked = true; return true; }
   if (!audioCtx) audioCtx = new Ctx();
-  if (audioCtx.state !== 'running') { try { await audioCtx.resume(); } catch(e) {} }
-  audioUnlocked = (audioCtx.state === 'running');
-  return audioUnlocked;
+  if (audioCtx.state !== 'running') { try { await audioCtx.resume(); } catch(e){} }
+  audioUnlocked = (audioCtx.state === 'running'); return audioUnlocked;
 }
 
 // Text-based Play/Pause button component
@@ -28,13 +26,39 @@ function PlayPauseButton({ isPlaying, onToggle }) {
   );
 }
 
+// Mute toggle button component
+function MuteToggleButton({ isMuted, onToggle, size = "small" }) {
+  const isLarge = size === "large";
+  return (
+    <button
+      onClick={onToggle}
+      aria-label={isMuted ? "Unmute" : "Mute"}
+      title={isMuted ? "Unmute" : "Mute"}
+      className={`absolute top-3 left-3 z-30 rounded-lg border border-white/20 bg-black/40 backdrop-blur-sm text-white transition-all duration-200 hover:bg-black/60 ${
+        isLarge 
+          ? "p-2.5 text-lg" 
+          : "p-1.5 text-sm"
+      }`}
+    >
+      {isMuted ? "🔇" : "🔊"}
+    </button>
+  );
+}
+
 export default function VideoPlayer({
   videoId, dataSrc, poster, title,
   onEnded, onError, onPlayStart,
   onRateLimited, onTryNext, onRequestClose,
-  videoMaxH, className = ""
+  videoMaxH, className = "", videoRef: externalVideoRef
 }) {
   const videoRef = useRef(null);
+  
+  // Sync external videoRef if provided
+  useEffect(() => {
+    if (externalVideoRef) {
+      externalVideoRef.current = videoRef.current;
+    }
+  }, [externalVideoRef]);
   const [srcSet, setSrcSet] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -74,6 +98,33 @@ export default function VideoPlayer({
     setDisliked(next); 
     setDislike(videoId, next); 
     if (next) { setLiked(false); } 
+  };
+
+  // Handle mute toggle
+  const handleMuteToggle = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    
+    const newMuted = !v.muted;
+    v.muted = newMuted;
+    setIsMuted(newMuted);
+    
+    // If unmuting, try to play to resume sound
+    if (!newMuted) {
+      unlockAudioOnce();
+      v.play().catch(() => {});
+    }
+  };
+
+  // Handle tap to unmute (when muted)
+  const handleTapToUnmute = () => {
+    const v = videoRef.current;
+    if (!v || !v.muted) return;
+    
+    v.muted = false;
+    setIsMuted(false);
+    unlockAudioOnce();
+    v.play().catch(() => {});
   };
 
   // Thumbnail capture function
@@ -161,23 +212,23 @@ export default function VideoPlayer({
     try {
       v.src = dataSrc; 
       v.load();
-      // Try unmuted first
       v.muted = false;
       await unlockAudioOnce();
       await v.play();
       setIsPlaying(true); 
       setIsBuffering(false); 
       setShowEndBar(false); 
+      setIsMuted(false);
       markPlayStarted();
     } catch {
       try {
-        // Fallback to muted if unmuted fails
         v.muted = true;
         await v.play();
         setIsPlaying(true); 
         setIsBuffering(false); 
         setShowEndBar(false); 
         setPendingUnmute(true); 
+        setIsMuted(true);
         markPlayStarted();
       } catch (err) {
         setShowTapToPlay(true);
@@ -187,18 +238,13 @@ export default function VideoPlayer({
 
   useEffect(() => () => clearTimeout(hideTimer.current), []);
 
-  // Audio unlock effect for mobile devices
+  // Add one-time listeners for audio unlocking on first user gesture
   useEffect(() => {
-    const handleUnlock = async () => {
-      await unlockAudioOnce();
-    };
-    
-    document.addEventListener('touchend', handleUnlock, { once: true });
-    document.addEventListener('click', handleUnlock, { once: true });
+    document.addEventListener('touchend', unlockAudioOnce, { once: true, passive: true });
+    document.addEventListener('click', unlockAudioOnce, { once: true });
     
     return () => {
-      document.removeEventListener('touchend', handleUnlock);
-      document.removeEventListener('click', handleUnlock);
+      // Cleanup not needed for once listeners, but good practice
     };
   }, []);
 
@@ -206,9 +252,6 @@ export default function VideoPlayer({
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-
-    // Set mobile-safe properties
-    v.disablePictureInPicture = true;
 
     const onPlay = () => {
       setIsPlaying(true);
@@ -378,18 +421,31 @@ export default function VideoPlayer({
           disablePictureInPicture
           controlsList="nodownload noplaybackrate nofullscreen"
           className="w-full h-auto rounded-lg bg-black object-contain
-                     max-h-[62vh] sm:max-h-[64vh] md:max-h-[68vh] lg:max-h-[68vh]"
-          onClick={() => {
-            if (videoRef.current?.muted) {
-              videoRef.current.muted = false;
-              unlockAudioOnce();
-              videoRef.current.play().catch(()=>{});
-            }
-          }}
+                     max-h-[62vh] sm:max-h-[64vh] md:max-h-[66vh] lg:max-h-[68vh]"
         />
         
-        {/* Remove/disable the old absolute scrubber overlay. Keep spinner/toasts/end bar as-is. */}
-        {/* Spinner / toasts / end mini-bar remain positioned absolute inside this wrapper */}
+        {/* Mute toggle button - positioned top-left */}
+        <MuteToggleButton 
+          isMuted={isMuted} 
+          onToggle={handleMuteToggle}
+          size={isMuted ? "large" : "small"}
+        />
+        
+        {/* Top-center "Tap to unmute" pill - only when muted */}
+        {isMuted && (
+          <div className="absolute top-3 left-1/2 transform -translate-x-1/2 z-30 px-4 py-2 rounded-full bg-black/60 text-white text-sm font-medium shadow-lg animate-pulse">
+            Tap to unmute
+          </div>
+        )}
+        
+        {/* Transparent click layer for tap to unmute - only when muted */}
+        {isMuted && (
+          <div 
+            className="absolute inset-0 z-20 cursor-pointer"
+            onClick={handleTapToUnmute}
+            style={{ pointerEvents: 'auto' }}
+          />
+        )}
         
         {/* Loading spinner */}
         {isBuffering && (
