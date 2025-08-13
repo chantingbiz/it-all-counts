@@ -10,7 +10,8 @@ async function unlockAudioOnce() {
   if (!Ctx) { audioUnlocked = true; return true; }
   if (!audioCtx) audioCtx = new Ctx();
   if (audioCtx.state !== 'running') { try { await audioCtx.resume(); } catch(e){} }
-  audioUnlocked = (audioCtx.state === 'running'); return audioUnlocked;
+  audioUnlocked = (audioCtx.state === 'running'); 
+  return audioUnlocked;
 }
 
 // Text-based Play/Pause button component
@@ -49,7 +50,8 @@ export default function VideoPlayer({
   videoId, dataSrc, poster, title,
   onEnded, onError, onPlayStart,
   onRateLimited, onTryNext, onRequestClose,
-  videoMaxH, className = "", videoRef: externalVideoRef
+  videoMaxH, className = "", videoRef: externalVideoRef,
+  onAudioStateChange
 }) {
   const videoRef = useRef(null);
   
@@ -67,6 +69,16 @@ export default function VideoPlayer({
       setIsMuted(videoRef.current.muted);
     }
   }, []);
+
+  // Notify parent of audio state changes
+  useEffect(() => {
+    if (onAudioStateChange) {
+      onAudioStateChange({
+        audioUnlocked: audioUnlockedRef.current,
+        userMuted: userMutedRef.current
+      });
+    }
+  }, [onAudioStateChange]);
   const [srcSet, setSrcSet] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -81,6 +93,10 @@ export default function VideoPlayer({
   const [showTapToPlay, setShowTapToPlay] = useState(false);
   const hideTimer = useRef(null);
   const stallRef = useRef(null); // stall watchdog
+  
+  // Track user intent vs. unlock state
+  const audioUnlockedRef = useRef(false);   // set true after AudioContext resume or a successful unmuted play
+  const userMutedRef = useRef(false);        // set true only when user toggles mute to on
   
   // Like/Dislike state
   const [liked, setLiked] = useState(isLiked(videoId));
@@ -118,9 +134,18 @@ export default function VideoPlayer({
     setIsMuted(newMuted);
     setIsMutedUI(newMuted);
     
+    // Track user intent
+    if (newMuted) {
+      userMutedRef.current = true;
+    } else {
+      userMutedRef.current = false;
+    }
+    
     // If unmuting, try to play to resume sound
     if (!newMuted) {
-      unlockAudioOnce();
+      unlockAudioOnce().then(() => {
+        audioUnlockedRef.current = true;
+      });
       v.play().catch(() => {});
     }
   };
@@ -133,7 +158,10 @@ export default function VideoPlayer({
     v.muted = false;
     setIsMuted(false);
     setIsMutedUI(false);
-    unlockAudioOnce();
+    userMutedRef.current = false;
+    unlockAudioOnce().then(() => {
+      audioUnlockedRef.current = true;
+    });
     v.play().catch(() => {});
   };
 
@@ -224,6 +252,7 @@ export default function VideoPlayer({
       v.load();
       v.muted = false;
       await unlockAudioOnce();
+      audioUnlockedRef.current = true;
       await v.play();
       setIsPlaying(true); 
       setIsBuffering(false); 
@@ -251,8 +280,14 @@ export default function VideoPlayer({
 
   // Add one-time listeners for audio unlocking on first user gesture
   useEffect(() => {
-    document.addEventListener('touchend', unlockAudioOnce, { once: true, passive: true });
-    document.addEventListener('click', unlockAudioOnce, { once: true });
+    const handleUnlock = () => {
+      unlockAudioOnce().then(() => {
+        audioUnlockedRef.current = true;
+      });
+    };
+    
+    document.addEventListener('touchend', handleUnlock, { once: true, passive: true });
+    document.addEventListener('click', handleUnlock, { once: true });
     
     return () => {
       // Cleanup not needed for once listeners, but good practice

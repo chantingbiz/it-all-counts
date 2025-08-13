@@ -95,6 +95,9 @@ export default function MotivateModal({
   const { onlyFavorites, setOnlyFavorites } = usePlaybackPrefs();
   const videoRef = useRef(null);
   
+  // Track audio state from VideoPlayer
+  const [audioState, setAudioState] = useState({ audioUnlocked: false, userMuted: false });
+  
   // Safe flushSync wrapper
   const flush = typeof _flushSync === 'function' ? _flushSync : (fn) => fn();
   
@@ -168,32 +171,20 @@ export default function MotivateModal({
       if (!videoRef.current) return;
       
       const v = videoRef.current;
-      const wasMuted = v.muted; // Preserve current muted state
       v.pause();
       v.src = nextUrl;
       v.load();
       
-      if (audioUnlocked) {
-        v.muted = wasMuted; // Preserve user's mute choice
-        try { 
-          await v.play(); 
-        } catch { 
-          // Only fall back to muted if play() fails
-          v.muted = true; 
-          try { 
-            await v.play(); 
-          } catch {} 
-        }
-      } else {
-        // If audio not unlocked yet, preserve muted state
-        v.muted = wasMuted;
-        try { 
-          await v.play(); 
-        } catch { 
-          v.muted = true; 
-          try { 
-            await v.play(); 
-          } catch {} 
+      const preferUnmuted = audioState.audioUnlocked && !audioState.userMuted;
+      v.muted = !preferUnmuted;
+      
+      try {
+        await v.play();
+      } catch {
+        // Fallback ONLY if we attempted unmuted
+        if (preferUnmuted) {
+          v.muted = true;
+          try { await v.play(); } catch {}
         }
       }
     } catch (e) {
@@ -293,6 +284,7 @@ export default function MotivateModal({
             onRequestClose={onRequestClose}
             className="w-full rounded-lg"
             videoRef={videoRef}
+            onAudioStateChange={setAudioState}
           />
         </div>
 
