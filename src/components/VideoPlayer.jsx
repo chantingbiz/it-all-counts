@@ -59,9 +59,18 @@ export default function VideoPlayer({
       externalVideoRef.current = videoRef.current;
     }
   }, [externalVideoRef]);
+
+  // Sync initial muted state
+  useEffect(() => {
+    if (videoRef.current) {
+      setIsMutedUI(videoRef.current.muted);
+      setIsMuted(videoRef.current.muted);
+    }
+  }, []);
   const [srcSet, setSrcSet] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [isMutedUI, setIsMutedUI] = useState(true); // Single source of truth for muted UI
   const [volume, setVolume] = useState(1);
   const [duration, setDuration] = useState(0);
   const [current, setCurrent] = useState(0);
@@ -69,7 +78,6 @@ export default function VideoPlayer({
   const [isBuffering, setIsBuffering] = useState(true);
   const [showEndBar, setShowEndBar] = useState(false);
   const [showErrorToast, setShowErrorToast] = useState(false);
-  const [pendingUnmute, setPendingUnmute] = useState(false);
   const [showTapToPlay, setShowTapToPlay] = useState(false);
   const hideTimer = useRef(null);
   const stallRef = useRef(null); // stall watchdog
@@ -108,6 +116,7 @@ export default function VideoPlayer({
     const newMuted = !v.muted;
     v.muted = newMuted;
     setIsMuted(newMuted);
+    setIsMutedUI(newMuted);
     
     // If unmuting, try to play to resume sound
     if (!newMuted) {
@@ -123,6 +132,7 @@ export default function VideoPlayer({
     
     v.muted = false;
     setIsMuted(false);
+    setIsMutedUI(false);
     unlockAudioOnce();
     v.play().catch(() => {});
   };
@@ -219,6 +229,7 @@ export default function VideoPlayer({
       setIsBuffering(false); 
       setShowEndBar(false); 
       setIsMuted(false);
+      setIsMutedUI(false);
       markPlayStarted();
     } catch {
       try {
@@ -227,8 +238,8 @@ export default function VideoPlayer({
         setIsPlaying(true); 
         setIsBuffering(false); 
         setShowEndBar(false); 
-        setPendingUnmute(true); 
         setIsMuted(true);
+        setIsMutedUI(true);
         markPlayStarted();
       } catch (err) {
         setShowTapToPlay(true);
@@ -293,8 +304,14 @@ export default function VideoPlayer({
     v.addEventListener("playing", onPlaying);
     v.addEventListener("canplay", onCanPlay);
     v.addEventListener("canplaythrough", onCanPlay);
+    const onVolumeChange = () => {
+      setIsMutedUI(v.muted);
+      setIsMuted(v.muted);
+    };
+
     v.addEventListener("ended", onEnd);
     v.addEventListener("error", onErr);
+    v.addEventListener("volumechange", onVolumeChange);
 
     return () => {
       v.removeEventListener("play", onPlay);
@@ -307,6 +324,7 @@ export default function VideoPlayer({
       v.removeEventListener("canplaythrough", onCanPlay);
       v.removeEventListener("ended", onEnd);
       v.removeEventListener("error", onErr);
+      v.removeEventListener("volumechange", onVolumeChange);
     };
   }, [onEnded, onError, videoId]);
 
@@ -426,20 +444,20 @@ export default function VideoPlayer({
         
         {/* Mute toggle button - positioned top-left */}
         <MuteToggleButton 
-          isMuted={isMuted} 
+          isMuted={isMutedUI} 
           onToggle={handleMuteToggle}
-          size={isMuted ? "large" : "small"}
+          size={isMutedUI ? "large" : "small"}
         />
         
         {/* Top-center "Tap to unmute" pill - only when muted */}
-        {isMuted && (
+        {isMutedUI && (
           <div className="absolute top-3 left-1/2 transform -translate-x-1/2 z-30 px-4 py-2 rounded-full bg-black/60 text-white text-sm font-medium shadow-lg animate-pulse">
             Tap to unmute
           </div>
         )}
         
         {/* Transparent click layer for tap to unmute - only when muted */}
-        {isMuted && (
+        {isMutedUI && (
           <div 
             className="absolute inset-0 z-20 cursor-pointer"
             onClick={handleTapToUnmute}
@@ -462,12 +480,7 @@ export default function VideoPlayer({
           </div>
         )}
 
-        {/* Tap to unmute toast */}
-        {pendingUnmute && (
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 rounded bg-black/60 text-white text-sm shadow">
-            Tap to unmute
-          </div>
-        )}
+
 
         {/* Tap to play overlay */}
         {showTapToPlay && (

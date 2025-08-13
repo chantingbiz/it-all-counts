@@ -168,12 +168,25 @@ export default function MotivateModal({
       if (!videoRef.current) return;
       
       const v = videoRef.current;
+      const wasMuted = v.muted; // Preserve current muted state
       v.pause();
       v.src = nextUrl;
       v.load();
       
       if (audioUnlocked) {
-        v.muted = false;
+        v.muted = wasMuted; // Preserve user's mute choice
+        try { 
+          await v.play(); 
+        } catch { 
+          // Only fall back to muted if play() fails
+          v.muted = true; 
+          try { 
+            await v.play(); 
+          } catch {} 
+        }
+      } else {
+        // If audio not unlocked yet, preserve muted state
+        v.muted = wasMuted;
         try { 
           await v.play(); 
         } catch { 
