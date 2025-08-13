@@ -1,5 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isLiked, isDisliked, setLike, setDislike, markWatched } from "../lib/userPrefs";
+import { isLiked, isDisliked, setLike, setDislike, markWatched, toggleFavorite } from "../lib/userPrefs";
+import RainbowPanel from "./RainbowPanel";
+
+// Text-based Play/Pause button component
+function PlayPauseButton({ isPlaying, onToggle }) {
+  return (
+    <button
+      onClick={onToggle}
+      aria-label={isPlaying ? "Pause" : "Play"}
+      className="h-8 w-16 md:h-10 md:w-20 rounded-md bg-black text-white inline-flex items-center justify-center shrink-0 font-medium text-sm md:text-base hover:bg-neutral-800 transition-colors"
+    >
+      {isPlaying ? "Pause" : "Play"}
+    </button>
+  );
+}
 
 export default function VideoPlayer({
   videoId, dataSrc, poster, title,
@@ -36,7 +50,10 @@ export default function VideoPlayer({
     const next = !liked; 
     setLiked(next); 
     setLike(videoId, next); 
-    if (next) { setDisliked(false); } 
+    if (next) { 
+      setDisliked(false); 
+      toggleFavorite(videoId); // Add to favorites when liked
+    }
   };
   
   const onDislike = () => { 
@@ -367,78 +384,84 @@ export default function VideoPlayer({
         {/* End mini bar */}
         {showEndBar && (
           <div className="absolute inset-x-0 bottom-16 z-20 flex items-center justify-center">
-            <div className="bg-white text-neutral-900 border border-neutral-200 rounded-full shadow px-3 py-1.5 flex gap-2">
-              <button className="px-2 py-0.5 rounded bg-neutral-900 text-white hover:bg-neutral-800"
+            <RainbowPanel className="px-3 py-1.5 rounded-full flex gap-2">
+              <button className="px-2 py-0.5 rounded bg-black text-white hover:bg-neutral-800"
                       onClick={() => { 
                         seek(0); 
                         setShowEndBar(false); 
                         play(); 
                       }}>Replay</button>
               {onRequestClose && (
-                <button className="px-2 py-0.5 rounded border border-neutral-300 hover:bg-neutral-50"
+                <button className="px-2 py-0.5 rounded bg-white text-black border border-neutral-300 hover:bg-neutral-50"
                         onClick={onRequestClose}>Close</button>
               )}
-            </div>
+            </RainbowPanel>
           </div>
         )}
       </div>
       
       {/* Footer controls BELOW video */}
-      <div className="mt-2">
-        <div className="w-full rounded-xl border border-neutral-200 bg-white/90 text-neutral-900 px-3 py-2">
-          {/* Row 1: Play + time (left) | Like/Dislike (right) */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={togglePlay}
-              className="h-8 px-3 rounded-lg bg-neutral-900 text-white text-xs sm:text-sm hover:bg-neutral-800 flex items-center justify-center leading-none"
-            >
-              {isPlaying ? "Pause" : "Play"}
-            </button>
-
-            <div className="text-xs tabular-nums text-neutral-700 whitespace-nowrap">
-              {fmt(current)} / {fmt(duration)}
-            </div>
-
-            <div className="ml-auto flex items-center gap-2">
+      <div className="mt-0">
+        <div className="w-full rounded-xl border border-neutral-200 bg-white/90 text-neutral-900 px-3 py-2 overflow-hidden">
+          {/* Top row: Play/Pause button and Thumbs Up/Down buttons */}
+          <div className="flex items-center justify-between gap-2 md:gap-3 w-full mb-0">
+            {/* Play/Pause button */}
+            <PlayPauseButton isPlaying={isPlaying} onToggle={togglePlay} />
+            
+                        {/* Like/Dislike buttons */}
+            <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={onLike}
-                className={`h-8 px-3 rounded-lg text-xs sm:text-sm border flex items-center justify-center ${
+                className={`flex items-center justify-center h-9 w-9 rounded-md border border-black/10 shadow-sm ${
                   liked 
                     ? "bg-green-600 text-white border-green-600 hover:bg-green-700" 
-                    : "bg-black text-white border-neutral-300 hover:bg-neutral-800"
+                    : "bg-white hover:bg-gray-50"
                 }`}
                 title="Like"
               >
-                <span className="text-lg sm:text-xl">👍</span>
+                <span className="text-lg leading-none">👍</span>
               </button>
               <button
+                type="button"
                 onClick={onDislike}
-                className={`h-8 px-3 rounded-lg text-xs sm:text-sm border flex items-center justify-center ${
+                className={`flex items-center justify-center h-9 w-9 rounded-md border border-black/10 shadow-sm ${
                   disliked 
                     ? "bg-red-600 text-white border-red-600 hover:bg-red-700" 
-                    : "bg-black text-white border-neutral-300 hover:bg-neutral-800"
+                    : "bg-white hover:bg-gray-50"
                 }`}
                 title="Dislike"
               >
-                <span className="text-lg sm:text-xl">👎</span>
+                <span className="text-lg leading-none">👎</span>
               </button>
             </div>
           </div>
-
-          {/* Row 2: scrubber */}
-          <div className="mt-1">
-            <input
-              type="range"
-              min={0}
-              max={Math.max(1, duration)}
-              step="0.1"
-              value={Math.min(current, duration || 0)}
-              onChange={(e)=>seek(Number(e.target.value))}
-              className="w-full iac-range"
-            />
+          
+          {/* Bottom row: scrubber bar and timestamps */}
+          <div className="flex items-center gap-2 md:gap-3 w-full">
+            {/* Current time */}
+            <span className="text-xs md:text-sm tabular-nums shrink-0 text-neutral-700 min-w-[2.5rem] md:min-w-[3rem]">
+              {fmt(current)}
+            </span>
+            
+            {/* Slider - flexible space */}
+            <div className="flex-1 min-w-0">
+              <input
+                type="range"
+                min={0}
+                max={Math.max(1, duration)}
+                step="0.1"
+                value={Math.min(current, duration || 0)}
+                onChange={(e)=>seek(Number(e.target.value))}
+                className="w-full iac-range"
+              />
+            </div>
+            
+            {/* Total duration */}
+            <span className="text-xs md:text-sm tabular-nums shrink-0 text-neutral-700 min-w-[2.5rem] md:min-w-[3rem]">
+              {fmt(duration)}
+            </span>
           </div>
-
-
         </div>
       </div>
       

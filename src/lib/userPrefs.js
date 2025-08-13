@@ -79,6 +79,88 @@ export function isLiked(videoId)   { return !!getPrefs().likes[videoId]; }
 export function isDisliked(videoId){ return !!getPrefs().dislikes[videoId]; }
 export function getHistory()       { return getPrefs().history || []; }
 
+// --- FAVORITES (persist across days) ---
+const FAVS_KEY = "iac.favorites"; // array of videoIds (strings)
+
+function emit(evt) {
+  try { window.dispatchEvent(new CustomEvent(evt)); } catch {}
+}
+
+export function getFavorites() {
+  try {
+    const raw = localStorage.getItem(FAVS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function isFavorite(videoId) {
+  const favs = getFavorites();
+  return favs.includes(String(videoId));
+}
+
+export function setFavorite(videoId, on) {
+  if (!videoId) return;
+  const favs = new Set(getFavorites());
+  if (on) { favs.add(String(videoId)); } else { favs.delete(String(videoId)); }
+  localStorage.setItem(FAVS_KEY, JSON.stringify(Array.from(favs)));
+  emit("iac:favorites:update");
+}
+
+export function addFavorite(videoId) {
+  setFavorite(videoId, true);
+}
+
+export function removeFavorite(videoId) {
+  setFavorite(videoId, false);
+}
+
+export function toggleFavorite(videoId) {
+  if (!videoId) return;
+  const on = !isFavorite(videoId);
+  setFavorite(videoId, on); // will emit update
+}
+
+// --- HISTORY DAILY RESET at 4 AM ---
+const HIST_KEY = "iac.history"; // assuming you already store an array of seen videoIds
+const HIST_LAST_RESET = "iac.hist.lastReset"; // epoch ms of last reset
+
+function next4amEpoch(from = Date.now()) {
+  const d = new Date(from);
+  // target = today 04:00 local; if past 04:00, target = tomorrow 04:00
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 4, 0, 0, 0);
+  if (d.getTime() >= target.getTime()) {
+    // tomorrow 4am
+    target.setDate(target.getDate() + 1);
+  }
+  return target.getTime();
+}
+
+/**
+ * Clears history if we crossed a 4 AM boundary since last reset.
+ * Call this on app start and before opening the video player.
+ */
+export function ensureHistoryRollOver() {
+  const now = Date.now();
+  const last = Number(localStorage.getItem(HIST_LAST_RESET) || 0);
+
+  // If last reset missing, set next 4am from now and bail
+  if (!last) {
+    localStorage.setItem(HIST_LAST_RESET, String(next4amEpoch(now)));
+    return;
+  }
+
+  if (now >= last) {
+    // time to reset daily history
+    try {
+      localStorage.setItem(HIST_KEY, JSON.stringify([]));
+    } catch { /* ignore */ }
+    // schedule next reset at the next 4 AM
+    localStorage.setItem(HIST_LAST_RESET, String(next4amEpoch(now)));
+  }
+}
+
 export async function getCacheEstimateMB() {
   try {
     if ('storage' in navigator && navigator.storage.estimate) {

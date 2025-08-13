@@ -1,11 +1,18 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Modal from "./components/Modal.jsx";
 import MotivateModal from "./components/MotivateModal.jsx";
+import QuotaModal from "./components/QuotaModal.jsx";
+import DailyCapBanner from "./components/DailyCapBanner.jsx";
+import ReplayBanner from "./components/ReplayBanner.jsx";
+import FavoritesModal from "./components/FavoritesModal.jsx";
 import VIDEO_GROUPS from "./data/videoGroups";
 import { useS3Keys } from "./hooks/useS3Keys";
 import { useShuffleBag } from "./hooks/useShuffleBag";
 import useTaskTimerHealth from "./hooks/useTaskTimerHealth";
+import useVideoQuota from "./hooks/useVideoQuota";
 import { createStorage, getActiveAdapter } from "./lib/storage.js";
+import { ensureHistoryRollOver, getFavorites, getHistory, isFavorite } from "./lib/userPrefs.js";
+import usePlaybackPrefs from "./hooks/usePlaybackPrefs";
 import goldTexture from "./assets/gold.png";
 import motivateVideo from "./assets/motivate.mp4";
 import motivateText from "./assets/motivate-text.png";
@@ -65,6 +72,11 @@ function App() {
   const [showClearAllConfirm, setShowClearAllConfirm] = useState(false);
   const clearAllConfirmYesRef = useRef(null);
 
+  // Video quota state
+  const [showDailyCap, setShowDailyCap] = useState(false);
+  const [showSoftCap, setShowSoftCap] = useState(false);
+  const [showFavorites, setShowFavorites] = useState(false);
+
   // Storage reference
   const storageRef = useRef(null);
 
@@ -94,6 +106,27 @@ function App() {
       }
     }
   });
+
+  // History rollover at 4 AM
+  useEffect(() => {
+    ensureHistoryRollOver();
+  }, []);
+
+  // Video quota hook
+  const {
+    inDailyCap,
+    hitSessionSoftCap,
+    inCooldown,
+    replayCountdownLabel,
+    markNewVideoStarted,
+    startCooldown,
+    resetSession,
+    DAILY_CAP,
+    SESSION_SOFT_CAP,
+  } = useVideoQuota();
+
+  // Playback preferences hook
+  const { onlyFavorites } = usePlaybackPrefs();
 
   // top-level in App.jsx
   const PREFIX = "clips/"; // hardcoded folder
@@ -137,22 +170,199 @@ function App() {
 
   const bag = useShuffleBag(keys);
 
-  function openMotivate() {
-    const k = bag.next();
-    if (k) {
-      setMotivateKey(k);
+  // Helper function to pick next candidate respecting favorites-only mode
+  function pickNextCandidate(basePicker, currentVideo) {
+    // basePicker: your existing function that picks the next video id/object in normal mode
+    // 1) Build the allowed pool depending on mode:
+    const favIds = new Set(getFavorites());
+    const histIds = new Set(getHistory().map(h => h.videoId));
+
+    // During cooldown → replay only from history
+    // If onlyFavorites is ON → replay only from history ∩ favorites
+    if (inCooldown && !inDailyCap) {
+      const pool = onlyFavorites
+        ? Array.from(histIds).filter(id => favIds.has(id))
+        : Array.from(histIds);
+
+      if (!pool.length) return null; // no allowed items
+      // Pick the next one after current in pool (wrap around)
+      const idx = currentVideo ? pool.lastIndexOf(currentVideo.id || currentVideo) : -1;
+      const nextId = pool[(idx + 1) % pool.length];
+      return { id: nextId };
+    }
+
+    // Not in cooldown:
+    if (onlyFavorites) {
+      // Only favorites (new or seen), but your daily cap logic elsewhere will block unseen at cap
+      // Prefer your existing ordering; here we pick next favorite using basePicker repeatedly
+      let safety = 100;
+      let candidate = null;
+      do {
+        candidate = basePicker();
+        if (!candidate) break;
+        // Handle both string IDs and objects with id property
+        const candidateId = typeof candidate === 'string' ? candidate : candidate.id;
+        if (isFavorite(candidateId)) {
+          return typeof candidate === 'string' ? { id: candidate } : candidate;
+        }
+        candidate = null;
+        safety--;
+      } while (safety > 0);
+      return null;
+    }
+
+    // Default behavior (no restriction)
+    const result = basePicker();
+    // Ensure consistent return format
+    return typeof result === 'string' ? { id: result } : result;
+  }
+
+  async function openMotivate() {
+    // Ensure history rollover before opening player
+    ensureHistoryRollOver();
+    
+    try {
+      if (inCooldown && !inDailyCap) {
+        // REPLAY MODE: only use history
+        const { getHistory } = await import("./lib/userPrefs");
+        const hist = getHistory();
+        if (!hist || hist.length === 0) return; // nothing to replay
+
+        // Use pickNextCandidate for replay mode
+        const candidate = pickNextCandidate(() => hist[0]?.videoId ? { id: hist[0].videoId } : null, null);
+        if (!candidate) {
+          // No allowed items in replay mode with favorites-only restriction
+          // Show a small notice and allow opening Favorites
+          console.log("No favorited videos in history to replay");
+          // You could show a toast here if desired
+          return;
+        }
+
+        setMotivateKey(candidate.id);
+        setShowMotivate(true);
+        return;
+      }
+
+      // Not in replay mode → use pickNextCandidate with favorites-only logic
+      const candidate = pickNextCandidate(() => bag.next(), null);
+      if (!candidate) return;
+
+      const { getHistory } = await import("./lib/userPrefs");
+      const history = getHistory();
+      const alreadySeen = history.some(h => h.videoId === candidate.id);
+      
+      if (!alreadySeen) {
+        // Enforce soft cap at 5: block the 6th unseen
+        if (hitSessionSoftCap && !inCooldown) {
+          // ensure nothing auto-plays a frame:
+          try {
+            const el = document.querySelector("video");
+            if (el) { el.pause(); el.currentTime = 0; }
+          } catch {
+            // Ignore errors when trying to pause video
+          }
+          setShowSoftCap(true);
+          return;
+        }
+        
+        if (inDailyCap) {
+          // Block loading unseen video; trigger the daily cap modal
+          setShowDailyCap(true);
+          return;
+        }
+        
+        markNewVideoStarted(); // count this unseen
+      }
+
+      setMotivateKey(candidate.id);
       setShowMotivate(true);
+    } catch (e) {
+      console.error("openMotivate error:", e);
     }
   }
 
-  function nextMotivate() {
-    const k = bag.next();
-    if (k) setMotivateKey(k);
+  async function nextMotivate() {
+    try {
+      if (inCooldown && !inDailyCap) {
+        // REPLAY MODE: only use history
+        const { getHistory } = await import("./lib/userPrefs");
+        const hist = getHistory();
+        const cur = motivateKey; // current video ID
+        if (!hist || hist.length === 0) return; // nothing to replay
+
+        // Use pickNextCandidate for replay mode
+        const candidate = pickNextCandidate(() => {
+          const idx = Math.max(0, hist.findIndex(h => h.videoId === cur));
+          const nextIdx = (idx + 1) % hist.length;
+          const nextId = hist[nextIdx].videoId;
+          return { id: nextId };
+        }, cur);
+        
+        if (!candidate) {
+          // No allowed items in replay mode with favorites-only restriction
+          console.log("No favorited videos in history to replay");
+          return;
+        }
+
+        setMotivateKey(candidate.id);
+        return;
+      }
+
+      // Not in replay mode → use pickNextCandidate with favorites-only logic
+      const candidate = pickNextCandidate(() => bag.next(), { id: motivateKey });
+      if (!candidate) return;
+
+      const { getHistory } = await import("./lib/userPrefs");
+      const history = getHistory();
+      const alreadySeen = history.some(h => h.videoId === candidate.id);
+      
+      if (!alreadySeen) {
+        // Enforce soft cap at 5: block the 6th unseen
+        if (hitSessionSoftCap && !inCooldown) {
+          // ensure nothing auto-plays a frame:
+          try {
+            const el = document.querySelector("video");
+            if (el) { el.pause(); el.currentTime = 0; }
+          } catch {
+            // Ignore errors when trying to pause video
+          }
+          setShowSoftCap(true);
+          return;
+        }
+        markNewVideoStarted(); // count this unseen
+      }
+
+      setMotivateKey(candidate.id);
+    } catch (e) {
+      console.error("nextMotivate error:", e);
+    }
   }
 
   function prevMotivate() {
-    const k = bag.prev();
-    if (k) setMotivateKey(k);
+    if (onlyFavorites) {
+      // In favorites-only mode, we need to find the previous favorite
+      // This is a simplified approach - you might want to enhance this
+      const k = bag.prev();
+      if (k && isFavorite(k)) {
+        setMotivateKey(k);
+      } else {
+        // Try to find the previous favorite by going back multiple times
+        let attempts = 0;
+        let found = false;
+        while (attempts < 10 && !found) {
+          const prev = bag.prev();
+          if (prev && isFavorite(prev)) {
+            setMotivateKey(prev);
+            found = true;
+          }
+          attempts++;
+        }
+      }
+    } else {
+      // Normal mode
+      const k = bag.prev();
+      if (k) setMotivateKey(k);
+    }
   }
 
   function closeMotivate() {
@@ -1069,6 +1279,9 @@ function App() {
             onClose={closeMotivate}
             closeEventName="iac-video-modal-closing"
           >
+            {/* Show daily cap banner ONLY when daily cap is hit */}
+            <DailyCapBanner show={inDailyCap} />
+            
             <MotivateModal
               selectedGroupIds={selectedGroupIds}
               toggleGroup={toggleGroup}
@@ -1085,8 +1298,47 @@ function App() {
               onPlayStart={() => {}}
               onRateLimited={() => {}}
               onRequestClose={closeMotivate}
+              inCooldown={inCooldown}
+              inDailyCap={inDailyCap}
+              replayCountdownLabel={replayCountdownLabel}
             />
           </Modal>
+
+          {/* Daily cap modal */}
+          <QuotaModal
+            open={showDailyCap}
+            title="Too many videos. Not enough doing."
+            body={`You've maxed out today's new clips (${DAILY_CAP}). New ones unlock tomorrow. Close this and knock out a task — Replay Mode will still show videos you've already seen.`}
+            onClose={() => {
+              setShowDailyCap(false);
+              // Close the player so the user returns to tasks
+              closeMotivate();
+            }}
+          />
+
+          {/* Session soft cap modal */}
+          <QuotaModal
+            open={showSoftCap}
+            title="Time to get back to it"
+            body={`You've watched ${SESSION_SOFT_CAP} new videos. New videos resume after a short break.`}
+            onClose={() => {
+              setShowSoftCap(false);
+              startCooldown();          // begin replay mode
+              closeMotivate();          // close the player
+              resetSession();           // reset session count once player closes
+            }}
+          />
+
+          {/* Favorites modal */}
+          <FavoritesModal
+            open={showFavorites}
+            onClose={() => setShowFavorites(false)}
+            onSelect={(videoId) => {
+              // load & play that specific video
+              setMotivateKey(videoId);
+              setShowMotivate(true);
+            }}
+          />
 
           {/* Task Manager - Clean Mobile-First Layout */}
           <div className="absolute left-1/2 transform -translate-x-1/2 z-20 flex flex-col items-center px-4 w-full max-w-[95vw]" style={{ top: 'calc(45% + 20px + 300px)' }}>
