@@ -44,7 +44,7 @@ export default function Modal({ open, onClose, onCloseStart, closeEventName, chi
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center">
+    <div className="fixed inset-0 z-[1000] flex items-start justify-center" style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 56px)' }}>
       <div
         className="absolute inset-0 bg-black/60"
         onClick={() => {
