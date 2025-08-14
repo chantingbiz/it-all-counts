@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useImperativeHandle, forwardRef } from "react";
 import { isLiked, isDisliked, setLike, setDislike, markWatched, toggleFavorite } from "../lib/userPrefs";
 import RainbowPanel from "./RainbowPanel";
 
@@ -46,15 +46,65 @@ function MuteToggleButton({ isMuted, onToggle, size = "small" }) {
   );
 }
 
-export default function VideoPlayer({
+const VideoPlayer = forwardRef(({
   videoId, dataSrc, poster, title,
   onEnded, onError, onPlayStart,
   onRateLimited, onTryNext, onRequestClose,
   videoMaxH, className = "", videoRef: externalVideoRef,
   onAudioStateChange
-}) {
+}, ref) => {
   const videoRef = useRef(null);
   
+  // Expose imperative methods to parent
+  useImperativeHandle(ref, () => ({
+    swapSourceAndPlayStrict: (nextUrl) => {
+      const v = videoRef.current;
+      if (!v || !nextUrl) return;
+
+      // Suppress the prop-driven effect briefly so our click-gesture play isn't overridden
+      suppressAutoGateRef.current = true;
+
+      const wasUnmuted = !v.muted;
+      if (wasUnmuted) audioUnlockedRef.current = true;
+
+      try { v.pause(); } catch {}
+      v.src = nextUrl;
+      try { v.load(); } catch {}
+
+      // Force unmuted and play IN THIS CLICK
+      v.muted = false;
+      v.play().then(() => {
+        audioUnlockedRef.current = true;
+        setIsPlaying(true);
+        setIsBuffering(false);
+        setShowEndBar(false);
+        setIsMuted(false);
+        setIsMutedUI(false);
+        setShowTapToPlay(false);
+        markPlayStarted();
+      }).catch(() => {
+        // Try again once shortly; do NOT flip to muted
+        setTimeout(() => {
+          v.play().then(() => {
+            audioUnlockedRef.current = true;
+            setIsPlaying(true);
+            setIsBuffering(false);
+            setShowEndBar(false);
+            setIsMuted(false);
+            setIsMutedUI(false);
+            setShowTapToPlay(false);
+            markPlayStarted();
+          }).catch(() => {
+            setShowTapToPlay(true); // last resort
+          });
+        }, 0);
+      });
+
+      // Allow the prop effect to resume shortly (after props settle)
+      setTimeout(() => { suppressAutoGateRef.current = false; }, 400);
+    }
+  }));
+
   // Sync external videoRef if provided
   useEffect(() => {
     if (externalVideoRef) {
@@ -97,6 +147,9 @@ export default function VideoPlayer({
   // Track user intent vs. unlock state
   const audioUnlockedRef = useRef(false);  // true after AudioContext resume OR a successful unmuted play
   const userMutedRef = useRef(false);      // true only when the user toggles mute on
+  
+  // Suppression flag to prevent prop-driven autoplay during strict swaps
+  const suppressAutoGateRef = useRef(false);
   
   // Like/Dislike state
   const [liked, setLiked] = useState(isLiked(videoId));
@@ -405,6 +458,13 @@ export default function VideoPlayer({
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !videoId || !dataSrc) return;
+
+    // Skip if a strict click swap is in progress
+    if (suppressAutoGateRef.current) return;
+
+    // Skip if the element already has this src (we already swapped)
+    if (v.currentSrc === dataSrc || v.src === dataSrc) return;
+
     // Hard reset old media to prevent ghost audio/first-frame flash
     try {
       v.pause();
@@ -650,7 +710,9 @@ export default function VideoPlayer({
         .iac-range::-webkit-slider-thumb { -webkit-appearance: none; height: 14px; width: 14px; border-radius: 9999px; background: #2563eb; margin-top: -5px; }
         .iac-range::-moz-range-track { height: 4px; border-radius: 9999px; background: rgba(0,0,0,0.15); }
         .iac-range::-moz-range-thumb { height: 14px; width: 14px; border: 0; border-radius: 9999px; background: #2563eb; }
-      `}</style>
+      `}      </style>
     </div>
   );
-}
+});
+
+export default VideoPlayer;

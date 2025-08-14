@@ -201,13 +201,21 @@ export default function MotivateModal({
       <VideoTopBar
         onPrevious={() => {
           if (!prevReady) return;
-          onPrev?.();
-          // TODO: implement swapSourceAndPlayStrict when available
+          // TODO: implement prevUrlPrefetched logic
+          const url = ""; // prevUrlPrefetched
+          if (url && videoRef.current?.swapSourceAndPlayStrict) {
+            videoRef.current.swapSourceAndPlayStrict(url); // do this first, in the click
+          }
+          onPrev?.(); // then let props update; the effect will be suppressed briefly
         }}
         onNext={() => {
           if (!nextReady) return;
-          onNext?.();
-          // TODO: implement swapSourceAndPlayStrict when available
+          // TODO: implement nextUrlPrefetched logic
+          const url = ""; // nextUrlPrefetched
+          if (url && videoRef.current?.swapSourceAndPlayStrict) {
+            videoRef.current.swapSourceAndPlayStrict(url); // do this first, in the click
+          }
+          onNext?.(); // then let props update; the effect will be suppressed briefly
         }}
         onFilters={() => setShowFilters(v => !v)}
         showFilters={showFilters}
