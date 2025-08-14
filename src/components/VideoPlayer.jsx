@@ -246,37 +246,55 @@ export default function VideoPlayer({
   const gateAndPlay = async (dataSrc) => {
     const v = videoRef.current;
     if (!v) return;
+
+    // 1) Preserve the current mute state across source changes.
+    //    If we are currently unmuted, we know audio was unlocked for this session.
+    const wasUnmuted = !v.muted;
+    if (wasUnmuted) {
+      audioUnlockedRef.current = true;
+    }
+
+    // 2) Swap source cleanly
     v.src = dataSrc;
     v.load();
 
-    const preferUnmuted = audioUnlockedRef.current && !userMutedRef.current;
+    // 3) Decide starting mute for the NEXT video:
+    //    - Prefer UNMUTED if:
+    //        * we were unmuted just now, OR
+    //        * audio has been unlocked in this session,
+    //      AND the user has NOT explicitly chosen to mute.
+    const preferUnmuted = (wasUnmuted || audioUnlockedRef.current) && !userMutedRef.current;
     v.muted = !preferUnmuted;
 
     try {
+      // 4) Try to play with the chosen mute state.
       await v.play();
       if (preferUnmuted) {
-        // mark unlock on success
+        // Mark unlock on success for downstream attempts.
         audioUnlockedRef.current = true;
       }
-      setIsPlaying(true); 
-      setIsBuffering(false); 
-      setShowEndBar(false); 
+
+      setIsPlaying(true);
+      setIsBuffering(false);
+      setShowEndBar(false);
       setIsMuted(v.muted);
       setIsMutedUI(v.muted);
       markPlayStarted();
     } catch {
-      // Only fallback if we attempted unmuted
+      // 5) ONLY if we attempted unmuted and the browser blocked it,
+      //    fall back to muted for THIS attempt.
       if (preferUnmuted) {
         v.muted = true;
-        try { 
-          await v.play(); 
-          setIsPlaying(true); 
-          setIsBuffering(false); 
-          setShowEndBar(false); 
+        try {
+          await v.play();
+          setIsPlaying(true);
+          setIsBuffering(false);
+          setShowEndBar(false);
           setIsMuted(true);
           setIsMutedUI(true);
           markPlayStarted();
         } catch (err) {
+          // Last resort: show "Tap to play"
           setShowTapToPlay(true);
         }
       }
