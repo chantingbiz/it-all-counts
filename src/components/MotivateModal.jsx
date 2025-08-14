@@ -166,30 +166,12 @@ export default function MotivateModal({
   }, [videoUrl]);
 
   // Handle video switching (next/prev) - reuse same video element
-  const handleVideoSwitch = async (nextUrl) => {
-    try {
-      if (!videoRef.current) return;
-      
-      const v = videoRef.current;
-      v.pause();
-      v.src = nextUrl;
-      v.load();
-      
-      const preferUnmuted = audioState.audioUnlocked && !audioState.userMuted;
-      v.muted = !preferUnmuted;
-      
-      try {
-        await v.play();
-      } catch {
-        // Fallback ONLY if we attempted unmuted
-        if (preferUnmuted) {
-          v.muted = true;
-          try { await v.play(); } catch {}
-        }
-      }
-    } catch (e) {
-      console.warn("Video switch failed:", e);
-    }
+  const handleVideoSwitch = () => {
+    // Intentionally no-op:
+    // Next/Prev updates s3Key, which updates videoUrl.
+    // VideoPlayer's effect will perform the source swap and preserve mute
+    // using the current element's muted state.
+    return;
   };
 
   // Keyboard shortcuts
