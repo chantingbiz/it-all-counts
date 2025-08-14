@@ -10,7 +10,7 @@ import { markWatched } from "../lib/userPrefs";
 import usePlaybackPrefs from "../hooks/usePlaybackPrefs";
 
 // VideoTopBar Component
-function VideoTopBar({ onPrevious, onNext, onFilters, showFilters, loading, poolCount, children, onVideoSwitch }) {
+function VideoTopBar({ onPrevious, onNext, onFilters, showFilters, loading, poolCount, children, onVideoSwitch, disablePrev=false, disableNext=false }) {
   return (
     <div className="sticky top-0 z-30 flex items-center justify-between bg-white px-3 py-2 border-b border-neutral-200">
       {/* Left side - Filters button */}
@@ -26,42 +26,44 @@ function VideoTopBar({ onPrevious, onNext, onFilters, showFilters, loading, pool
         {/* Previous button - square, icon-only */}
         <button
           onClick={() => {
+            if (disablePrev) return;
             onPrevious?.();
-            // Handle video switching if callback provided
-            if (onVideoSwitch) {
-              // Get previous video URL - this would need to be implemented based on your video source logic
-              // For now, just call the handler
-              onVideoSwitch();
-            }
+            onVideoSwitch?.("prev"); // optional signal; it won't touch the video
           }}
-          disabled={loading}
-          className="h-8 w-8 md:h-10 md:w-10 px-0 inline-flex items-center justify-center rounded-lg border border-black/10 bg-black text-white leading-none whitespace-nowrap text-sm"
-          aria-label="Previous video"
-          title="Previous"
+          disabled={disablePrev}
+          aria-busy={disablePrev ? "true" : "false"}
+          title={disablePrev ? "Loading previous video…" : "Previous"}
+          className={"h-8 w-8 md:h-10 md:w-10 px-0 inline-flex items-center justify-center rounded-lg border border-black/10 leading-none whitespace-nowrap text-sm " + (disablePrev ? "bg-gray-300 text-gray-500 cursor-not-allowed" : "bg-black text-white")}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ display: 'block' }}>
-            <path d="M15 18l-6-6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
+          {disablePrev ? (
+            <span className="inline-block h-4 w-4 rounded-full border-2 border-white/70 border-t-transparent animate-spin" />
+          ) : (
+            /* existing left arrow SVG */
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ display:'block' }}>
+              <path d="M15 18l-6-6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          )}
         </button>
 
         {/* Next button */}
         <button
           onClick={() => {
+            if (disableNext) return;
             onNext?.();
-            // Handle video switching if callback provided
-            if (onVideoSwitch) {
-              // Get next video URL - this would need to be implemented based on your video source logic
-              // For now, just call the handler
-              onVideoSwitch();
-            }
+            onVideoSwitch?.("next"); // optional signal
           }}
-          disabled={loading || (poolCount || 0) < 1}
-          className="h-8 px-2 text-xs md:h-10 md:px-3 md:text-sm inline-flex items-center justify-center rounded-lg border border-black/10 bg-black text-white leading-none whitespace-nowrap"
+          disabled={disableNext}
+          aria-busy={disableNext ? "true" : "false"}
+          title={disableNext ? "Loading next video…" : "Next video"}
+          className={"h-8 px-2 text-xs md:h-10 md:px-3 md:text-sm inline-flex items-center justify-center rounded-lg border border-black/10 leading-none whitespace-nowrap gap-2 " + (disableNext ? "bg-gray-300 text-gray-500 cursor-wait" : "bg-black text-white")}
         >
-          Next video
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
+          {disableNext && <span className="inline-block h-4 w-4 rounded-full border-2 border-white/70 border-t-transparent animate-spin" />}
+          <span>Next video</span>
+          {!disableNext && (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          )}
         </button>
       </div>
       
@@ -97,6 +99,10 @@ export default function MotivateModal({
   
   // Track audio state from VideoPlayer
   const [audioState, setAudioState] = useState({ audioUnlocked: false, userMuted: false });
+  
+  // Derive disabled flags for navigation buttons
+  const disablePrev = false; // TODO: implement prevUrlPrefetched logic
+  const disableNext = false; // TODO: implement nextUrlPrefetched logic
   
   // Safe flushSync wrapper
   const flush = typeof _flushSync === 'function' ? _flushSync : (fn) => fn();
@@ -190,13 +196,23 @@ export default function MotivateModal({
     <div className="rounded-2xl bg-white text-neutral-900 shadow-xl max-h-[90vh] flex flex-col min-h-0 pb-5 sm:pb-6">
       {/* Video Top Bar */}
       <VideoTopBar
-        onPrevious={onPrev}
-        onNext={onNext}
+        onPrevious={() => {
+          if (disablePrev) return;
+          onPrev?.();
+          // TODO: implement swapSourceAndPlayStrict when available
+        }}
+        onNext={() => {
+          if (disableNext) return;
+          onNext?.();
+          // TODO: implement swapSourceAndPlayStrict when available
+        }}
         onFilters={() => setShowFilters(v => !v)}
         showFilters={showFilters}
         loading={loading}
         poolCount={poolCount}
         onVideoSwitch={handleVideoSwitch}
+        disablePrev={disablePrev}
+        disableNext={disableNext}
       />
 
       {/* Scrollable content area */}
