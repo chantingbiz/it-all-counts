@@ -10,7 +10,7 @@ import { markWatched } from "../lib/userPrefs";
 import usePlaybackPrefs from "../hooks/usePlaybackPrefs";
 
 // VideoTopBar Component
-function VideoTopBar({ onPrevious, onNext, onFilters, showFilters, loading, poolCount, children, onVideoSwitch, disablePrev=false, disableNext=false }) {
+function VideoTopBar({ onPrevious, onNext, onFilters, showFilters, loading, poolCount, children, onVideoSwitch, prevReady=true, nextReady=true }) {
   return (
     <div className="sticky top-0 z-30 flex items-center justify-between bg-white px-3 py-2 border-b border-neutral-200">
       {/* Left side - Filters button */}
@@ -26,19 +26,18 @@ function VideoTopBar({ onPrevious, onNext, onFilters, showFilters, loading, pool
         {/* Previous button - square, icon-only */}
         <button
           onClick={() => {
-            if (disablePrev) return;
+            if (!prevReady) return;
             onPrevious?.();
-            onVideoSwitch?.("prev"); // optional signal; it won't touch the video
+            onVideoSwitch?.("prev");
           }}
-          disabled={disablePrev}
-          aria-busy={disablePrev ? "true" : "false"}
-          title={disablePrev ? "Loading previous video…" : "Previous"}
-          className={"h-8 w-8 md:h-10 md:w-10 px-0 inline-flex items-center justify-center rounded-lg border border-black/10 leading-none whitespace-nowrap text-sm " + (disablePrev ? "bg-gray-300 text-gray-500 cursor-not-allowed" : "bg-black text-white")}
+          disabled={!prevReady}
+          aria-busy={!prevReady ? "true" : "false"}
+          aria-label="Previous video"
+          className={"h-8 w-8 md:h-10 md:w-10 px-0 inline-flex items-center justify-center rounded-lg border border-black/10 " + (!prevReady ? "bg-gray-300 text-gray-500 cursor-wait" : "bg-black text-white")}
         >
-          {disablePrev ? (
+          {!prevReady ? (
             <span className="inline-block h-4 w-4 rounded-full border-2 border-white/70 border-t-transparent animate-spin" />
           ) : (
-            /* existing left arrow SVG */
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ display:'block' }}>
               <path d="M15 18l-6-6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
@@ -48,21 +47,25 @@ function VideoTopBar({ onPrevious, onNext, onFilters, showFilters, loading, pool
         {/* Next button */}
         <button
           onClick={() => {
-            if (disableNext) return;
+            if (!nextReady) return;
             onNext?.();
-            onVideoSwitch?.("next"); // optional signal
+            onVideoSwitch?.("next");
           }}
-          disabled={disableNext}
-          aria-busy={disableNext ? "true" : "false"}
-          title={disableNext ? "Loading next video…" : "Next video"}
-          className={"h-8 px-2 text-xs md:h-10 md:px-3 md:text-sm inline-flex items-center justify-center rounded-lg border border-black/10 leading-none whitespace-nowrap gap-2 " + (disableNext ? "bg-gray-300 text-gray-500 cursor-wait" : "bg-black text-white")}
+          disabled={!nextReady}
+          aria-busy={!nextReady ? "true" : "false"}
+          aria-label="Next video"
+          className={"h-8 px-2 text-xs md:h-10 md:px-3 md:text-sm inline-flex items-center justify-center rounded-lg border border-black/10 " + (!nextReady ? "bg-gray-300 text-gray-500 cursor-wait" : "bg-black text-white")}
+          style={{ gap: '0.5rem' }}
         >
-          {disableNext && <span className="inline-block h-4 w-4 rounded-full border-2 border-white/70 border-t-transparent animate-spin" />}
-          <span>Next video</span>
-          {!disableNext && (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
+          {!nextReady ? (
+            <span className="inline-block h-4 w-4 rounded-full border-2 border-white/70 border-t-transparent animate-spin" />
+          ) : (
+            <>
+              <span>Next video</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </>
           )}
         </button>
       </div>
@@ -100,9 +103,9 @@ export default function MotivateModal({
   // Track audio state from VideoPlayer
   const [audioState, setAudioState] = useState({ audioUnlocked: false, userMuted: false });
   
-  // Derive disabled flags for navigation buttons
-  const disablePrev = false; // TODO: implement prevUrlPrefetched logic
-  const disableNext = false; // TODO: implement nextUrlPrefetched logic
+  // Derive ready flags for navigation buttons
+  const prevReady = true; // TODO: implement prevUrlPrefetched logic
+  const nextReady = true; // TODO: implement nextUrlPrefetched logic
   
   // Safe flushSync wrapper
   const flush = typeof _flushSync === 'function' ? _flushSync : (fn) => fn();
@@ -197,12 +200,12 @@ export default function MotivateModal({
       {/* Video Top Bar */}
       <VideoTopBar
         onPrevious={() => {
-          if (disablePrev) return;
+          if (!prevReady) return;
           onPrev?.();
           // TODO: implement swapSourceAndPlayStrict when available
         }}
         onNext={() => {
-          if (disableNext) return;
+          if (!nextReady) return;
           onNext?.();
           // TODO: implement swapSourceAndPlayStrict when available
         }}
@@ -211,8 +214,8 @@ export default function MotivateModal({
         loading={loading}
         poolCount={poolCount}
         onVideoSwitch={handleVideoSwitch}
-        disablePrev={disablePrev}
-        disableNext={disableNext}
+        prevReady={prevReady}
+        nextReady={nextReady}
       />
 
       {/* Scrollable content area */}
